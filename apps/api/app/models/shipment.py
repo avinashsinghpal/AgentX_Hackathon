@@ -1,0 +1,63 @@
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.order import Order
+
+
+class Shipment(Base):
+    __tablename__ = "shipments"
+
+    order_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    courier_partner: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+    )
+    tracking_number: Mapped[str] = mapped_column(
+        String(128),
+        index=True,
+        nullable=False,
+    )
+    awb: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    dispatch_pincode: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+    )
+    destination_pincode: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+    )
+    promised_delivery_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    actual_delivery_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        index=True,
+    )  # "manifested" | "in_transit" | "out_for_delivery" | "delivered" | "failed_attempt" | "delayed"
+    tracking_events: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+    )  # list of {timestamp, location, status, description}
+
+    order: Mapped["Order"] = relationship("Order", back_populates="shipments")

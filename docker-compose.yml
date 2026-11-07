@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - DEBUG=false
+      - DATABASE_URL=sqlite:///./sellerresolve.db
+      - SECRET_KEY=replace-with-a-secure-random-32-byte-hex-key-in-production
+      - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+    volumes:
+      - api-data:/app/uploads
+      - api-db:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - API_PROXY_URL=http://api:8000/api/:path*
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  api-data:
+  api-db:
+

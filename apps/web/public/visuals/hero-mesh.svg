@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="100%" height="100%">
+  <defs>
+    <radialGradient id="meshGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.25" />
+      <stop offset="40%" stop-color="#a78bfa" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#0a0a0f" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="gridGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eca8d6" stop-opacity="0.2" />
+      <stop offset="50%" stop-color="#67e8f9" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.05" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="#06060c" />
+  <circle cx="700" cy="400" r="450" fill="url(#meshGlow)" />
+  <g stroke="url(#gridGrad)" stroke-width="1" opacity="0.4">
+    <path d="M 0,200 Q 300,100 600,250 T 1200,180" fill="none" />
+    <path d="M 0,350 Q 350,220 700,380 T 1200,320" fill="none" />
+    <path d="M 0,500 Q 400,380 800,520 T 1200,460" fill="none" />
+    <path d="M 0,650 Q 450,520 900,660 T 1200,600" fill="none" />
+  </g>
+  <g fill="#67e8f9" opacity="0.5">
+    <circle cx="300" cy="230" r="3" />
+    <circle cx="600" cy="250" r="4" />
+    <circle cx="700" cy="380" r="3.5" />
+    <circle cx="900" cy="500" r="4" />
+    <circle cx="450" cy="420" r="2.5" />
+    <circle cx="1050" cy="360" r="3" />
+  </g>
+</svg>
+

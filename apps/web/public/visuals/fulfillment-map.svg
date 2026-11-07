@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" height="100%">
+  <defs>
+    <radialGradient id="sphereGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#18182b" />
+      <stop offset="70%" stop-color="#0a0a12" />
+      <stop offset="100%" stop-color="#050508" />
+    </radialGradient>
+    <linearGradient id="routeArc" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.3" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="transparent" />
+  <circle cx="400" cy="300" r="240" fill="url(#sphereGrad)" stroke="#262640" stroke-width="1.5" />
+  
+  <!-- Latitude and Longitude Grid Lines -->
+  <ellipse cx="400" cy="300" rx="240" ry="120" fill="none" stroke="#2a2a46" stroke-width="1" opacity="0.6" />
+  <ellipse cx="400" cy="300" rx="240" ry="60" fill="none" stroke="#2a2a46" stroke-width="1" opacity="0.6" />
+  <ellipse cx="400" cy="300" rx="120" ry="240" fill="none" stroke="#2a2a46" stroke-width="1" opacity="0.6" />
+
+  <!-- India Hub Locations (Delhi, Mumbai, Bengaluru, Kolkata, Chennai) -->
+  <!-- Delhi -->
+  <circle cx="390" cy="220" r="5" fill="#67e8f9" />
+  <text x="390" y="210" font-family="monospace" font-size="11" fill="#67e8f9" text-anchor="middle">DELHI HUB</text>
+  <!-- Mumbai -->
+  <circle cx="340" cy="300" r="5" fill="#67e8f9" />
+  <text x="300" y="305" font-family="monospace" font-size="11" fill="#67e8f9" text-anchor="end">MUMBAI</text>
+  <!-- Bengaluru -->
+  <circle cx="370" cy="380" r="5" fill="#67e8f9" />
+  <text x="370" y="405" font-family="monospace" font-size="11" fill="#67e8f9" text-anchor="middle">BENGALURU</text>
+  <!-- Kolkata -->
+  <circle cx="480" cy="270" r="5" fill="#67e8f9" />
+  <text x="520" y="275" font-family="monospace" font-size="11" fill="#67e8f9" text-anchor="start">KOLKATA</text>
+
+  <!-- Route arcs -->
+  <path d="M 390,220 Q 350,250 340,300" fill="none" stroke="url(#routeArc)" stroke-width="2" />
+  <path d="M 340,300 Q 345,350 370,380" fill="none" stroke="url(#routeArc)" stroke-width="2" />
+  <path d="M 390,220 Q 440,230 480,270" fill="none" stroke="url(#routeArc)" stroke-width="2" />
+  <path d="M 370,380 Q 440,340 480,270" fill="none" stroke="url(#routeArc)" stroke-width="2" stroke-dasharray="4 4" />
+</svg>
+
