@@ -60,9 +60,7 @@ def test_normalized_rows_are_preferred_over_the_json_snapshot(db: Session) -> No
     sync_order_items(db, order, order.items)
 
     # A stale snapshot must not win over the authoritative rows.
-    order.items = [
-        {"sku": "STALE", "title": "Stale", "quantity": 1, "unit_price": 999.0}
-    ]
+    order.items = [{"sku": "STALE", "title": "Stale", "quantity": 1, "unit_price": 999.0}]
     db.flush()
     payload = order_items_payload(order)
     assert payload[0]["sku"] == "A"

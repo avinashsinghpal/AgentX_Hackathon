@@ -17,9 +17,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "api"))
 os.environ.setdefault("ENV", "development")
 os.environ.setdefault("SECRET_KEY", "replace-with-a-secure-random-32-byte-hex-key-in-production")
 
+if os.environ.get("ENV", "development").lower() in {"production", "prod", "staging"}:
+    print("Demo seeding is disabled outside development/testing.", file=sys.stderr)
+    raise SystemExit(1)
+
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine
+
 from app.core.security import hash_password
-from app.db.base import Base
-from app.db.session import engine, get_db
+from app.db.session import get_db
 from app.models.buyer import Buyer
 from app.models.order import Order
 from app.models.seller import Seller, SellerCustomerLink, SellerOperations, SellerPolicy
@@ -28,8 +36,37 @@ from app.models.user import User
 from app.schemas.policy import PolicySchema, policy_to_yaml
 
 
-def seed_demo_accounts() -> None:
-    Base.metadata.create_all(bind=engine)
+def _alembic_head_revision() -> str:
+    config_path = Path(__file__).resolve().parent.parent / "apps" / "api" / "alembic.ini"
+    config = Config(str(config_path))
+    config.set_main_option("script_location", str(config_path.parent / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    head = script.get_current_head()
+    if head is None:
+        raise RuntimeError("No Alembic head revision is available.")
+    return head
+
+
+def _current_alembic_revision(engine) -> str | None:
+    with engine.connect() as connection:
+        context = MigrationContext.configure(connection)
+        return context.get_current_revision()
+
+
+def _require_alembic_head(engine) -> None:
+    current = _current_alembic_revision(engine)
+    head = _alembic_head_revision()
+    if current != head:
+        raise SystemExit(
+            "The target database is not at the required Alembic head revision "
+            f"({head}). Current revision: {current or 'none'}. "
+            "Run 'alembic upgrade head' against the target database before seeding."
+        )
+
+
+def seed_demo_accounts(*, force_reset: bool = False) -> None:
+    engine = create_engine(os.environ["DATABASE_URL"])
+    _require_alembic_head(engine)
     db = next(get_db())
 
     try:
@@ -49,8 +86,9 @@ def seed_demo_accounts() -> None:
             db.flush()
             print("Created User: seller@store.com")
         else:
-            seller_user.password_hash = hash_password("Password123!")
             seller_user.is_active = True
+            if force_reset:
+                seller_user.password_hash = hash_password("Password123!")
             db.flush()
 
         seller = db.query(Seller).filter(Seller.user_id == seller_user.id).first()
@@ -139,8 +177,9 @@ def seed_demo_accounts() -> None:
             db.flush()
             print("Created User: buyer@example.com")
         else:
-            buyer_user.password_hash = hash_password("Password123!")
             buyer_user.is_active = True
+            if force_reset:
+                buyer_user.password_hash = hash_password("Password123!")
             db.flush()
 
         buyer = db.query(Buyer).filter(Buyer.user_id == buyer_user.id).first()
@@ -277,4 +316,20 @@ def seed_demo_accounts() -> None:
 
 
 if __name__ == "__main__":
-    seed_demo_accounts()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed SellerResolve demo accounts")
+    parser.add_argument(
+        "--force-reset",
+        action="store_true",
+        help="Reset demo account passwords after explicit confirmation.",
+    )
+    args = parser.parse_args()
+
+    if args.force_reset:
+        confirmation = input("Type RESET to confirm demo password reset: ").strip()
+        if confirmation != "RESET":
+            print("Password reset cancelled.", file=sys.stderr)
+            raise SystemExit(1)
+
+    seed_demo_accounts(force_reset=args.force_reset)

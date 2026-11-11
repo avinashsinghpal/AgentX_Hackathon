@@ -63,9 +63,7 @@ class RiskEngine:
         elif not isinstance(inputs, RiskEvaluationInput):
             try:
                 values = {
-                    key: value
-                    for key, value in vars(inputs).items()
-                    if not key.startswith("_")
+                    key: value for key, value in vars(inputs).items() if not key.startswith("_")
                 }
             except TypeError:
                 values = {}
@@ -124,8 +122,7 @@ class RiskEngine:
         if order_address is not None and buyer_address is not None:
             common_fields = set(order_address) & set(buyer_address)
             if common_fields and any(
-                order_address[field] != buyer_address[field]
-                for field in common_fields
+                order_address[field] != buyer_address[field] for field in common_fields
             ):
                 flags.append(
                     RiskFlag(

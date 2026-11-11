@@ -296,6 +296,11 @@ class ActionService:
         resolution_type: str | None = None,
         extra_details: dict[str, Any] | None = None,
     ) -> None:
+        if case.status not in {"investigating", "pending_approval", "open"}:
+            raise ValueError(
+                f"Cannot apply a successful action to case in unexpected state "
+                f"'{case.status}'."
+            )
         now = datetime.now(UTC)
         amount_major = (action.amount_minor or 0) / 100.0
 

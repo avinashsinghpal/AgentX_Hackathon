@@ -1,7 +1,7 @@
 """PostgreSQL-specific schema assertions.
 
-Skipped on SQLite. Run the suite with TEST_DATABASE_URL pointing at PostgreSQL
-(see docs/runbook.md) to execute these.
+SellerResolve supports PostgreSQL only; these assertions run with the rest of
+the integration suite.
 """
 
 from __future__ import annotations
@@ -20,9 +20,7 @@ def test_new_json_columns_are_jsonb(db: Session) -> None:
     _require_postgres(db)
     inspector = inspect(db.get_bind())
     actions = {column["name"]: column for column in inspector.get_columns("actions")}
-    evaluations = {
-        column["name"]: column for column in inspector.get_columns("policy_evaluations")
-    }
+    evaluations = {column["name"]: column for column in inspector.get_columns("policy_evaluations")}
     assert "JSONB" in str(actions["request_payload"]["type"]).upper()
     assert "JSONB" in str(evaluations["evaluation_result"]["type"]).upper()
 

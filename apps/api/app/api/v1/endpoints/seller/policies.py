@@ -52,9 +52,7 @@ def _document_response(document: PolicyDocument) -> PolicyDocumentResponse:
         currency=document.currency,
         policy_yaml=document.policy_yaml,
         config=policy,
-        parsed_rules=(
-            policy.model_dump(mode="json") if policy else dict(document.parsed_rules)
-        ),
+        parsed_rules=(policy.model_dump(mode="json") if policy else dict(document.parsed_rules)),
         monetary_minor=monetary_minor_model(policy) if policy else None,
         activated_at=document.activated_at,
         created_at=document.created_at,
@@ -94,9 +92,7 @@ def _history_item(row: SellerPolicy) -> PolicyHistoryItem:
         refunds = row.parsed_rules.get("refunds") or {}
         returns = row.parsed_rules.get("returns") or {}
         if isinstance(refunds, dict):
-            raw_ceiling = refunds.get(
-                "auto_approve_up_to", refunds.get("auto_approve_max_amount")
-            )
+            raw_ceiling = refunds.get("auto_approve_up_to", refunds.get("auto_approve_max_amount"))
             if isinstance(raw_ceiling, int) and not isinstance(raw_ceiling, bool):
                 refund_ceiling = raw_ceiling
         if isinstance(returns, dict):
@@ -319,4 +315,3 @@ def save_policy(
         ) from exc
 
     return _publish_response(published)
-

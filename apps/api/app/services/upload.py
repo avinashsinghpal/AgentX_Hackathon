@@ -91,6 +91,14 @@ class FileUploadService:
             storage_path=storage_path,
         )
         db.add(record)
-        db.commit()
-        db.refresh(record)
+        try:
+            db.commit()
+            db.refresh(record)
+        except Exception:
+            db.rollback()
+            try:
+                Path(storage_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return record

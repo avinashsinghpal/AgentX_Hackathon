@@ -28,6 +28,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.logging import logger
+
 #: Minor units per major unit for the supported two-decimal currencies (INR).
 MAJOR_UNITS_PER_CURRENCY_UNIT = 100
 
@@ -122,14 +124,9 @@ class RefundsPolicy(BaseModel):
             approval = auto
         if auto != approval:
             raise ValueError(
-                "refunds.require_seller_approval_above must equal "
-                "refunds.auto_approve_up_to"
+                "refunds.require_seller_approval_above must equal refunds.auto_approve_up_to"
             )
-        cleaned = {
-            key: value
-            for key, value in data.items()
-            if key != "auto_approve_max_amount"
-        }
+        cleaned = {key: value for key, value in data.items() if key != "auto_approve_max_amount"}
         return {
             **cleaned,
             "auto_approve_up_to": auto,
@@ -141,9 +138,7 @@ class RefundsPolicy(BaseModel):
     def validate_ceiling(cls, v: int, info: ValidationInfo) -> int:
         auto_up_to = info.data.get("auto_approve_up_to", 500) if info.data else 500
         if v != auto_up_to:
-            raise ValueError(
-                "require_seller_approval_above must equal auto_approve_up_to"
-            )
+            raise ValueError("require_seller_approval_above must equal auto_approve_up_to")
         return v
 
     @property
@@ -206,6 +201,16 @@ class DamageClaimsPolicy(BaseModel):
 class FraudChecksPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def warn_legacy_claim_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "max_claims_per_buyer_90_days" in data:
+            logger.warning(
+                "Legacy policy key 'max_claims_per_buyer_90_days' was supplied; "
+                "it is treated as a 30-day refund limit, not a 90-day claim limit."
+            )
+        return data
+
     max_refunds_per_buyer_per_30_days: int = Field(
         default=3,
         ge=1,
@@ -259,9 +264,7 @@ class PolicySchema(BaseModel):
             ),
             "delay_compensation_per_day_minor": self.delays.compensation_per_day_minor,
             "delay_compensation_max_minor": self.delays.max_compensation_minor,
-            "damage_auto_replacement_max_minor": (
-                self.damage_claims.auto_replacement_under_minor
-            ),
+            "damage_auto_replacement_max_minor": (self.damage_claims.auto_replacement_under_minor),
             "damage_warehouse_inspection_threshold_minor": (
                 self.damage_claims.warehouse_inspection_threshold_minor
             ),

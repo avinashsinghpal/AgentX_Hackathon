@@ -29,8 +29,8 @@ Desktop.ini
 .env
 .env*.local
 *.env
-# ! .env.example
-# ! apps/api/.env.example
+!.env.example
+!apps/api/.env.example
 
 # Node.js & Next.js Frontend
 node_modules/

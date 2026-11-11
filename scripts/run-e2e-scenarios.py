@@ -22,23 +22,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "api"))
 
 os.environ["ENV"] = "testing"
 os.environ["SECRET_KEY"] = "e2e-test-secret-key-32-bytes-minimum-ok"
-# By default the scenario suite is self-contained on SQLite.  Set
-# E2E_DATABASE_URL to run the exact same scenarios against an explicit database
-# (for example the Docker PostgreSQL instance) without touching the app's
-# configured DATABASE_URL.
-E2E_DATABASE_URL = os.environ.get("E2E_DATABASE_URL")
-if E2E_DATABASE_URL:
-    os.environ["DATABASE_URL"] = E2E_DATABASE_URL
-else:
-    # Keep the artifact next to the API package and use an absolute URL so the
-    # run is independent of the caller's working directory (a relative URL
-    # previously left a stale database behind that was missing new columns).
-    E2E_DB_PATH = Path(__file__).resolve().parent.parent / "apps" / "api" / "e2e-scenarios.db"
-    E2E_DB_PATH.unlink(missing_ok=True)
-    os.environ["DATABASE_URL"] = f"sqlite:///{E2E_DB_PATH.as_posix()}"
+# The scenario suite requires PostgreSQL.  Set E2E_DATABASE_URL (or DATABASE_URL)
+# to a dedicated PostgreSQL database; the suite creates its tables there.
+E2E_DATABASE_URL = os.environ.get("E2E_DATABASE_URL") or os.environ.get("DATABASE_URL")
+if not E2E_DATABASE_URL:
+    raise SystemExit(
+        "E2E_DATABASE_URL (or DATABASE_URL) must point to PostgreSQL, "
+        "for example postgresql+psycopg://sellerresolve:password@localhost:5432/sellerresolve_test"
+    )
+os.environ["DATABASE_URL"] = E2E_DATABASE_URL
 
-from app.db.base import Base
-from app.db.session import engine, get_db
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine
+
+from app.db.session import get_db
 from app.models.action import Action
 from app.models.buyer import Buyer
 from app.models.case import ApprovalRequest, Case, CaseMessage
@@ -75,15 +74,42 @@ def assert_zero_emoji(text: str, context: str) -> None:
         raise ValueError(f"Forbidden emoji found in {context}: {matches}")
 
 
+def _alembic_head_revision() -> str:
+    config_path = Path(__file__).resolve().parent.parent / "apps" / "api" / "alembic.ini"
+    config = Config(str(config_path))
+    config.set_main_option("script_location", str(config_path.parent / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    head = script.get_current_head()
+    if head is None:
+        raise RuntimeError("No Alembic head revision is available.")
+    return head
+
+
+def _current_alembic_revision(engine) -> str | None:
+    with engine.connect() as connection:
+        context = MigrationContext.configure(connection)
+        return context.get_current_revision()
+
+
+def _require_alembic_head(engine) -> None:
+    current = _current_alembic_revision(engine)
+    head = _alembic_head_revision()
+    if current != head:
+        raise SystemExit(
+            "The target database is not at the required Alembic head revision "
+            f"({head}). Current revision: {current or 'none'}. "
+            "Run 'alembic upgrade head' against the target database before running E2E scenarios."
+        )
+
+
 async def run_e2e_suite() -> None:
     print("=" * 70)
     print("  SellerResolve — Automated End-to-End Scenario Suite")
     print("  Autonomous, Policy-Aware Resolution Engine Verification")
     print("=" * 70)
 
-    # Initialize tables if the target database/schema is empty.  Existing
-    # migrated PostgreSQL schemas are left untouched.
-    Base.metadata.create_all(bind=engine)
+    engine = create_engine(os.environ["DATABASE_URL"])
+    _require_alembic_head(engine)
     db = next(get_db())
 
     try:

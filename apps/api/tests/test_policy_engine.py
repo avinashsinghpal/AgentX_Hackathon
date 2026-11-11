@@ -185,9 +185,7 @@ def test_damage_claim_with_photo_is_evaluated_normally() -> None:
 
 
 def test_currency_mismatch_requires_manual_review() -> None:
-    result = ENGINE.evaluate(
-        make_inputs(policy=make_policy(currency="INR"), order_currency="USD")
-    )
+    result = ENGINE.evaluate(make_inputs(policy=make_policy(currency="INR"), order_currency="USD"))
     assert result.decision is Decision.MANUAL_REVIEW
     assert result.reason_code == "CURRENCY_MISMATCH"
     assert result.badge == "needs_approval"
@@ -292,9 +290,7 @@ def test_legacy_policy_keys_normalize_to_canonical_schema() -> None:
 
 def test_invalid_policy_document_requires_manual_review() -> None:
     inputs = make_inputs(policy=None)
-    inputs = PolicyEvaluationInput(
-        **{**inputs.__dict__, "policy": None, "policy_invalid": True}
-    )
+    inputs = PolicyEvaluationInput(**{**inputs.__dict__, "policy": None, "policy_invalid": True})
     result = ENGINE.evaluate(inputs)
     assert result.decision is Decision.MANUAL_REVIEW
     assert result.reason_code == "POLICY_INVALID"

@@ -170,3 +170,16 @@ docker compose build
 docker compose up -d
 ```
 
+
+## Fake LLM end-to-end testing
+
+1. Set `LLM_PROVIDER=fake` in `apps/api/.env`.
+2. Start PostgreSQL and apply migrations (`run.ps1 db-up`, `run.ps1 db-migrate`).
+3. Seed demo users (`run.ps1 seed`) and demo orders from the seller console.
+4. Sign in as `seller@store.com` / `Password123!`.
+5. Create a buyer case or use a seeded order.
+6. Submit a buyer message and verify the deterministic decision badge.
+7. Inspect investigation telemetry and the audit chain for the case.
+8. Confirm no external LLM credentials are required.
+
+Fake-provider testing exercises deterministic policy, approval, action, verification and audit behavior. Real Gemini testing requires `LLM_PROVIDER=gemini` and `GEMINI_API_KEY`, and uses `verify-llm` to report provider/model/verification without exposing credentials.

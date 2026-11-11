@@ -58,6 +58,7 @@ class LLMClient(ABC):
     @property
     def model_name(self) -> str:
         return ""
+
     @abstractmethod
     async def generate_response(
         self,
@@ -141,6 +142,43 @@ class FakeLLMClient(LLMClient):
         clean_text = sanitize_no_emoji(reply)
         return LLMResponse(text=clean_text)
 
+    async def generate_with_tools(
+        self,
+        messages: list[LLMMessage],
+        tool_declarations: list[dict[str, Any]],
+        tool_executor: Any,
+        max_calls: int,
+        temperature: float = 0.1,
+    ) -> str:
+        """Run a deterministic investigation-tool workflow for offline tests."""
+        budget = max(0, int(max_calls or 0))
+        available = {
+            str(tool.get("name")) for tool in tool_declarations if tool.get("name")
+        }
+        preferred = [
+            "lookup_order",
+            "lookup_shipment",
+            "get_tracking_events",
+            "get_buyer_history",
+            "get_evidence_summary",
+            "get_policy_summary",
+        ]
+        sequence = [name for name in preferred if name in available]
+        used = 0
+        for name in sequence:
+            if used >= budget:
+                break
+            try:
+                await tool_executor(name, {})
+            except Exception:
+                pass
+            used += 1
+
+        return (
+            "Investigation complete: order, tracking, buyer history and evidence reviewed "
+            "using deterministic offline tools."
+        )
+
     async def stream_response(
         self,
         messages: list[LLMMessage],
@@ -198,9 +236,7 @@ class GeminiLLMClient(LLMClient):
                 res = await client.post(url, json=payload)
                 if res.status_code != 200:
                     logger.error("Gemini API error: %s", res.text)
-                    raise LLMProviderError(
-                        f"Gemini request failed with HTTP {res.status_code}"
-                    )
+                    raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
 
                 data = res.json()
                 raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -226,8 +262,7 @@ class GeminiLLMClient(LLMClient):
                 contents.append({"role": role, "parts": [{"text": message.content}]})
 
         url = (
-            f"{self.base_url}/models/{self.model}:streamGenerateContent"
-            f"?alt=sse&key={self.api_key}"
+            f"{self.base_url}/models/{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
         )
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
@@ -274,13 +309,8 @@ class GeminiLLMClient(LLMClient):
         max_calls: int,
         temperature: float = 0.1,
     ) -> str:
-        """Run a native Gemini function-calling loop and return final text.
-
-        The loop supports sequential and batched function calls, feeds every
-        structured result back to the model, and is bounded by ``max_calls``.
-        Unknown tools or executor failures become tool results instead of being
-        silently ignored; the model must then produce a final answer.
-        """
+        """Run a native Gemini function-calling loop and return final text."""
+        budget = max(0, int(max_calls or 0))
         system_instruction = ZERO_EMOJI_SYSTEM_PROMPT
         contents: list[dict[str, Any]] = []
         for message in messages:
@@ -302,18 +332,66 @@ class GeminiLLMClient(LLMClient):
                 {
                     "name": name,
                     "description": tool.get("description", ""),
-                    "parameters": tool.get(
-                        "parameters", {"type": "object", "properties": {}}
-                    ),
+                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
                 }
             )
 
+        if budget == 0:
+            response = await self.generate_response(messages, temperature)
+            return response.text
+
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
         used_calls = 0
-        max_iterations = max(max_calls, 1) + 1
-        iteration = 0
-        while iteration < max_iterations and used_calls < max(max_calls, 1):
-            iteration += 1
+
+        async def final_response(retry: bool = False) -> str:
+            payload = {
+                "system_instruction": {"parts": [{"text": system_instruction}]},
+                "contents": contents,
+                "generationConfig": {"temperature": temperature, "maxOutputTokens": 1024},
+            }
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post(url, json=payload)
+                    if res.status_code != 200:
+                        raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
+                    data = res.json()
+            except LLMProviderError:
+                raise
+            except Exception as exc:
+                raise LLMProviderError("Gemini request failed") from exc
+            candidate = (data.get("candidates") or [{}])[0]
+            content = candidate.get("content") or {}
+            parts = content.get("parts") or []
+            text_parts = [
+                part.get("text", "")
+                for part in parts
+                if isinstance(part, dict) and part.get("text")
+            ]
+            text = sanitize_no_emoji("".join(text_parts).strip())
+            function_calls = [
+                part.get("functionCall")
+                for part in parts
+                if isinstance(part, dict) and part.get("functionCall")
+            ]
+            if function_calls and not text and not retry:
+                contents.append({"role": "model", "parts": parts})
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Respond with a concise final answer in plain text. "
+                                    "Do not call any tools."
+                                )
+                            }
+                        ],
+                    }
+                )
+                return await final_response(retry=True)
+            return text
+
+        while used_calls < budget:
             payload: dict[str, Any] = {
                 "system_instruction": {"parts": [{"text": system_instruction}]},
                 "contents": contents,
@@ -326,9 +404,7 @@ class GeminiLLMClient(LLMClient):
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     res = await client.post(url, json=payload)
                     if res.status_code != 200:
-                        raise LLMProviderError(
-                            f"Gemini request failed with HTTP {res.status_code}"
-                        )
+                        raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
                     data = res.json()
             except LLMProviderError:
                 raise
@@ -339,8 +415,8 @@ class GeminiLLMClient(LLMClient):
             content = candidate.get("content") or {}
             parts = content.get("parts") or []
             function_calls = [
-                (index, part.get("functionCall"))
-                for index, part in enumerate(parts)
+                part.get("functionCall")
+                for part in parts
                 if isinstance(part, dict) and part.get("functionCall")
             ]
 
@@ -352,26 +428,28 @@ class GeminiLLMClient(LLMClient):
                 ]
                 return sanitize_no_emoji("".join(text_parts).strip())
 
-            # Preserve the full model turn, including thought signatures and text.
+            # Preserve the original model turn, including thought signatures.
             contents.append({"role": "model", "parts": parts})
 
+            remaining = budget - used_calls
+            over_budget = len(function_calls) > remaining
             response_parts: list[dict[str, Any]] = []
-            for _, function_call in function_calls:
-                if used_calls >= max(max_calls, 1):
-                    break
+            for function_call in function_calls:
                 function_call = function_call or {}
                 tool_name = str(function_call.get("name") or "")
                 arguments = function_call.get("args") or {}
                 if not isinstance(arguments, dict):
                     arguments = {}
 
-                if tool_name not in allowed_tools:
-                    observation: Any = {"error": f"Unknown or unauthorized tool: {tool_name}"}
+                if over_budget:
+                    observation: Any = {"error": "Tool call budget exceeded"}
+                elif tool_name not in allowed_tools:
+                    observation = {"error": "Unknown or unauthorized tool"}
                 else:
                     try:
                         observation = await tool_executor(tool_name, arguments)
-                    except Exception as exc:
-                        observation = {"error": str(exc)}
+                    except Exception:
+                        observation = {"error": "Tool execution failed"}
 
                 response_parts.append(
                     {
@@ -381,12 +459,14 @@ class GeminiLLMClient(LLMClient):
                         }
                     }
                 )
-                used_calls += 1
 
-            if response_parts:
-                contents.append({"role": "user", "parts": response_parts})
+            contents.append({"role": "user", "parts": response_parts})
+            if over_budget:
+                used_calls = budget
+            else:
+                used_calls += min(len(function_calls), remaining)
 
-        return ""
+        return await final_response()
 
 
 class LLMProviderError(RuntimeError):
@@ -491,6 +571,11 @@ def get_llm_client() -> LLMClient:
                 "LLM_PROVIDER is set to 'gemini' but GEMINI_API_KEY is not configured. "
                 "Set GEMINI_API_KEY in apps/api/.env or set LLM_PROVIDER=fake."
             )
+        if model and not model.lower().startswith("gemini"):
+            raise LLMConfigurationError(
+                "A Claude model ID cannot be used with the Gemini provider. "
+                "Set LLM_MODEL to a Gemini model or leave it empty."
+            )
         return GeminiLLMClient(
             api_key=str(api_key).strip(),
             model=model or "gemini-2.5-flash",
@@ -502,6 +587,11 @@ def get_llm_client() -> LLMClient:
             raise LLMConfigurationError(
                 "LLM_PROVIDER is set to 'anthropic' but ANTHROPIC_API_KEY is not configured. "
                 "Set ANTHROPIC_API_KEY in apps/api/.env or set LLM_PROVIDER=fake."
+            )
+        if model and not model.lower().startswith("claude"):
+            raise LLMConfigurationError(
+                "An Anthropic provider requires a Claude model ID. "
+                "Set LLM_MODEL to a Claude model or leave it empty."
             )
         return AnthropicLLMClient(
             api_key=str(api_key).strip(),

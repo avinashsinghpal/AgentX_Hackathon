@@ -71,8 +71,6 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=compare_types,
             compare_server_default=True,
-            # SQLite cannot ALTER most constraints; batch mode recreates tables.
-            render_as_batch=connection.dialect.name == "sqlite",
         )
 
         with context.begin_transaction():

@@ -197,14 +197,9 @@ class AuditLogService:
             expected_prev_hash = rec.current_hash
 
         if check_head and records:
-            state = (
-                db.query(AuditChainState)
-                .filter(AuditChainState.chain_key == chain_key)
-                .first()
-            )
+            state = db.query(AuditChainState).filter(AuditChainState.chain_key == chain_key).first()
             if state is not None and (
-                state.last_hash != expected_prev_hash
-                or state.last_sequence != records[-1].sequence
+                state.last_hash != expected_prev_hash or state.last_sequence != records[-1].sequence
             ):
                 return (
                     False,

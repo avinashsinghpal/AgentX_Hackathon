@@ -130,14 +130,10 @@ def test_rejection_never_creates_or_executes_an_action(db: Session) -> None:
 def test_approval_cannot_be_decided_twice(db: Session) -> None:
     seller, _order, _case, approval = _pending_approval(db)
     service = ApprovalService()
-    service.decide(
-        db, approval_id=approval.id, seller=seller, decision="approved"
-    )
+    service.decide(db, approval_id=approval.id, seller=seller, decision="approved")
 
     with pytest.raises(ApprovalStateError):
-        service.decide(
-            db, approval_id=approval.id, seller=seller, decision="rejected"
-        )
+        service.decide(db, approval_id=approval.id, seller=seller, decision="rejected")
 
 
 def test_expired_approval_cannot_be_executed(db: Session) -> None:
@@ -146,9 +142,7 @@ def test_expired_approval_cannot_be_executed(db: Session) -> None:
     db.commit()
 
     with pytest.raises(ApprovalStateError, match="expired"):
-        ApprovalService().decide(
-            db, approval_id=approval.id, seller=seller, decision="approved"
-        )
+        ApprovalService().decide(db, approval_id=approval.id, seller=seller, decision="approved")
 
     db.refresh(approval)
     db.refresh(case)
@@ -161,9 +155,7 @@ def test_another_seller_cannot_decide_the_approval(db: Session) -> None:
     intruder = make_seller(db)
 
     with pytest.raises(ApprovalNotFoundError):
-        ApprovalService().decide(
-            db, approval_id=approval.id, seller=intruder, decision="approved"
-        )
+        ApprovalService().decide(db, approval_id=approval.id, seller=intruder, decision="approved")
 
 
 def test_repeated_escalation_reuses_the_pending_request(db: Session) -> None:
@@ -178,9 +170,4 @@ def test_repeated_escalation_reuses_the_pending_request(db: Session) -> None:
     )
 
     assert again.id == approval.id
-    assert (
-        db.query(ApprovalRequest)
-        .filter(ApprovalRequest.case_id == case.id)
-        .count()
-        == 1
-    )
+    assert db.query(ApprovalRequest).filter(ApprovalRequest.case_id == case.id).count() == 1

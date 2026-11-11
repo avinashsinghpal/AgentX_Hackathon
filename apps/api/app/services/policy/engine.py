@@ -182,9 +182,7 @@ class PolicyEngine:
                 )
 
             assert inputs.shipment is not None
-            delivery_date = (
-                inputs.shipment.actual_delivery_date or inputs.shipment.latest_event_at
-            )
+            delivery_date = inputs.shipment.actual_delivery_date or inputs.shipment.latest_event_at
             assert delivery_date is not None
             days_since_delivery = guards.days_between(now, delivery_date)
 
@@ -579,8 +577,7 @@ class PolicyEngine:
             case_id=inputs.case.id,
             currency=inputs.order.currency,
             policy_id=inputs.policy_id,
-            policy_version=inputs.policy_version
-            or (inputs.policy.version if inputs.policy else 0),
+            policy_version=inputs.policy_version or (inputs.policy.version if inputs.policy else 0),
             decision=decision,
             reason_code=reason_code,
             reason=reason,

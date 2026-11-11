@@ -128,7 +128,5 @@ def test_evidence_is_scoped_to_the_case_buyer_and_seller(
     buyer_res = client.get(url, headers=auth_headers_for_user(buyer.user_id, "buyer"))
     assert buyer_res.status_code == 200
 
-    intruder_res = client.get(
-        url, headers=auth_headers_for_user(intruder.user_id, "seller")
-    )
+    intruder_res = client.get(url, headers=auth_headers_for_user(intruder.user_id, "seller"))
     assert intruder_res.status_code == 403

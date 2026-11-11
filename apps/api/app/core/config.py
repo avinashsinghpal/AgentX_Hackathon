@@ -1,24 +1,21 @@
+from pathlib import Path
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Kept for local development only.  It is rejected outside development/testing.
 INSECURE_SECRET_DEFAULT = "dev-insecure-secret-key-change-in-production-1234567890"
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+psycopg://sellerresolve:buntykishunty@localhost:5432/sellerresolve"
-)
-
-
 class Settings(BaseSettings):
     ENV: str = "development"
     DEBUG: bool = True
     SECRET_KEY: str = INSECURE_SECRET_DEFAULT
 
-    # PostgreSQL is the default development database.  SQLite stays supported
-    # for isolated tests (sqlite:///:memory:) and existing local workflows.
-    DATABASE_URL: str = DEFAULT_DATABASE_URL
+    # PostgreSQL is the only supported application database.  This value is
+    # required; there is no SQLite or other fallback.
+    DATABASE_URL: str
 
-    # Connection pool (ignored for SQLite, which uses StaticPool for :memory:).
+    # Connection pool for PostgreSQL.
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT: int = 30
@@ -44,7 +41,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     LLM_PROVIDER: str = "fake"
-    LLM_MODEL: str = "claude-3-5-sonnet-20241022"
+    LLM_MODEL: str = ""
 
     SMTP_HOST: str | None = None
     SMTP_PORT: int | None = None
@@ -54,10 +51,24 @@ class Settings(BaseSettings):
     PROACTIVE_MONITOR_INTERVAL_MINUTES: int = 60
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(
+            str(Path(__file__).resolve().parents[3] / ".env"),
+            str(Path(__file__).resolve().parents[2] / ".env"),
+            ".env",
+        ),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_database_url(self) -> "Settings":
+        if not self.DATABASE_URL or not self.DATABASE_URL.startswith("postgresql"):
+            raise ValueError(
+                "DATABASE_URL must point to PostgreSQL. SQLite and other databases "
+                "are not supported. Example: "
+                "postgresql+psycopg://sellerresolve:password@localhost:5432/sellerresolve"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_secret_key(self) -> "Settings":
@@ -71,4 +82,4 @@ class Settings(BaseSettings):
         return self
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

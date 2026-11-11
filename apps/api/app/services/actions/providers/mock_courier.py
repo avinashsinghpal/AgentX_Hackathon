@@ -54,9 +54,7 @@ class MockCourierProvider(ActionProvider):
         if configured in {"failure", "retryable_error"}:
             return ProviderOutcome(
                 status="failed",
-                error_code="COURIER_REJECTED"
-                if configured == "failure"
-                else "COURIER_UNAVAILABLE",
+                error_code="COURIER_REJECTED" if configured == "failure" else "COURIER_UNAVAILABLE",
                 payload={"reason": "return label could not be generated"},
                 retryable=configured == "retryable_error",
             )

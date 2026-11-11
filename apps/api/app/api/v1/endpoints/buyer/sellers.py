@@ -55,9 +55,7 @@ def get_sellers_directory(
                 rules = active_policy.parsed_rules
                 if isinstance(rules.get("returns"), dict):
                     return_window = rules["returns"].get("window_days", 7)
-                    shipping_fee_bearer = rules["returns"].get(
-                        "return_shipping_paid_by", "seller"
-                    )
+                    shipping_fee_bearer = rules["returns"].get("return_shipping_paid_by", "seller")
 
         orders_count = db.query(Order).filter(Order.seller_id == s.id).count()
 

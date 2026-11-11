@@ -71,6 +71,7 @@ class Case(Base):
     workflow_state: Mapped[str] = mapped_column(
         String(32),
         default="intake",
+        server_default="intake",
         nullable=False,
         index=True,
     )  # explicit orchestration state; see app.services.agent.workflow

@@ -11,7 +11,6 @@ from app.services.audit import AuditLogService
 from app.services.orders import order_items_payload, sync_order_items, sync_tracking_events
 
 router = APIRouter(prefix="/orders", tags=["Seller Orders"])
-demo_router = APIRouter(tags=["Seller Orders"])
 
 
 @dataclass
@@ -297,7 +296,3 @@ def seed_demo_orders(
         "orders": created_orders,
     }
 
-
-demo_router.add_api_route(
-    "/demo-seed", seed_demo_orders, methods=["POST"], status_code=status.HTTP_201_CREATED
-)

@@ -40,9 +40,7 @@ switch ($Target) {
     }
     "seed" {
         Write-Host "Seeding demo records..." -ForegroundColor Cyan
-        Set-Location apps/api
-        .venv/Scripts/python.exe -m app.db.seed
-        Set-Location ../..
+        apps/api/.venv/Scripts/python.exe scripts/seed-demo-users.py
     }
     "db-up" {
         Write-Host "Starting PostgreSQL via docker compose..." -ForegroundColor Cyan
@@ -63,13 +61,17 @@ switch ($Target) {
         Set-Location ../..
     }
     "e2e" {
-        Write-Host "Running Playwright E2E test suite..." -ForegroundColor Cyan
-        Set-Location apps/web
-        pnpm exec playwright test
+        Write-Host "Running backend E2E scenario suite..." -ForegroundColor Cyan
+        apps/api/.venv/Scripts/python.exe scripts/run-e2e-scenarios.py
+    }
+    "verify-llm" {
+        Write-Host "Verifying LLM configuration..." -ForegroundColor Cyan
+        Set-Location apps/api
+        .venv/Scripts/python.exe -c "import asyncio; from app.services.llm.client import verify_llm_configuration; print(asyncio.run(verify_llm_configuration()))"
         Set-Location ../..
     }
     Default {
-        Write-Host "Unknown target: $Target. Available targets: dev, lint, test, build, seed, e2e, db-up, db-migrate, db-check" -ForegroundColor Red
+        Write-Host "Unknown target: $Target. Available targets: dev, lint, test, build, seed, e2e, verify-llm, db-up, db-migrate, db-check" -ForegroundColor Red
         Exit 1
     }
 }

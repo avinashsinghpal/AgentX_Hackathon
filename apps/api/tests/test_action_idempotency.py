@@ -73,16 +73,12 @@ def test_repeated_execution_does_not_duplicate_the_refund(db: Session) -> None:
     payment = MockPaymentProvider()
     service = ActionService(registry=ProviderRegistry(payment_provider=payment))
 
-    first = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    first = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
     assert first.executed is True
     assert first.action.status == "succeeded"
     assert first.action.external_reference
 
-    second = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    second = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
     assert second.executed is True
     assert second.already_completed is True
     assert second.action.id == first.action.id
@@ -103,9 +99,7 @@ def test_retry_after_provider_timeout_recovers_instead_of_paying_twice(
     payment.configure_outcome("refund", "timeout")
     service = ActionService(registry=ProviderRegistry(payment_provider=payment))
 
-    timed_out = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    timed_out = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
     assert timed_out.executed is False
     assert timed_out.status == "timeout"
     assert timed_out.action.status == "submitted"
@@ -114,9 +108,7 @@ def test_retry_after_provider_timeout_recovers_instead_of_paying_twice(
     assert len(payment._operations) == 1
 
     payment.configure_outcome("refund", "success")
-    retried = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    retried = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
     assert retried.executed is True
     assert retried.action.status == "succeeded"
     assert retried.action.id == timed_out.action.id
@@ -131,9 +123,7 @@ def test_idempotency_key_is_deterministic_for_the_same_evaluation(db: Session) -
 
     payment = MockPaymentProvider()
     service = ActionService(registry=ProviderRegistry(payment_provider=payment))
-    first = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    first = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
 
     from app.services.actions.idempotency import build_idempotency_key
 

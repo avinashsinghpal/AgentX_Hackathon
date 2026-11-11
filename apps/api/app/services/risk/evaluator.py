@@ -80,9 +80,7 @@ class RiskEvaluationService:
             threshold = policy.fraud_checks.max_refunds_per_buyer_per_30_days
 
         history_count = (
-            db.query(Order).filter(Order.buyer_id == case.buyer_id).count()
-            if case.buyer_id
-            else 0
+            db.query(Order).filter(Order.buyer_id == case.buyer_id).count() if case.buyer_id else 0
         )
 
         inputs = RiskEvaluationInput(

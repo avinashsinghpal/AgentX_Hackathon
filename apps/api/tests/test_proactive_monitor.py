@@ -111,9 +111,7 @@ def test_no_compensation_configured_creates_no_case(db: Session) -> None:
 
 
 def test_compensation_above_ceiling_requires_approval(db: Session) -> None:
-    _seller, order, _shipment = _delayed_shipment(
-        db, per_day=100, maximum=1000, ceiling=500
-    )
+    _seller, order, _shipment = _delayed_shipment(db, per_day=100, maximum=1000, ceiling=500)
 
     remedies = run_delay_monitor_cycle(db, now=NOW)
 
@@ -148,3 +146,38 @@ def test_missing_promised_date_is_skipped_safely(db: Session) -> None:
 
     assert remedies == []
     assert db.query(Case).filter(Case.order_id == order.id).count() == 0
+
+
+def test_concurrent_workers_create_one_compensation(db) -> None:
+    """Exercise separate sessions; db fixture keeps the shared test schema alive."""
+    from app.db.base import Base
+    from tests.conftest import TestingSessionLocal, test_engine
+
+    Base.metadata.create_all(bind=test_engine)
+    setup = TestingSessionLocal()
+    try:
+        _seller, order, _shipment = _delayed_shipment(setup)
+        setup.commit()
+        order_id = order.id
+    finally:
+        setup.close()
+
+    first = TestingSessionLocal()
+    second = TestingSessionLocal()
+    try:
+        first_remedies = run_delay_monitor_cycle(first, now=NOW)
+        second_remedies = run_delay_monitor_cycle(second, now=NOW + timedelta(minutes=1))
+
+        assert len(first_remedies) + len(second_remedies) == 1
+
+        verifier = TestingSessionLocal()
+        try:
+            assert verifier.query(Action).filter(Action.order_id == order_id).count() == 1
+            assert verifier.query(Case).filter(Case.order_id == order_id).count() == 1
+            action = verifier.query(Action).filter(Action.order_id == order_id).one()
+            assert action.status == "succeeded"
+        finally:
+            verifier.close()
+    finally:
+        first.close()
+        second.close()

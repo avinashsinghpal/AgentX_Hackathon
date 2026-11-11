@@ -268,7 +268,10 @@ class ResolutionOrchestrator:
                 }
             cases = (
                 db.query(Case)
-                .filter(Case.buyer_id == case.buyer_id)
+                .filter(
+                    Case.buyer_id == case.buyer_id,
+                    Case.seller_id == case.seller_id,
+                )
                 .order_by(Case.created_at.desc())
                 .limit(limit)
                 .all()
@@ -293,9 +296,7 @@ class ResolutionOrchestrator:
                 )
             else:
                 refund_actions = []
-            refunded_amount_minor = sum(
-                int(action.amount_minor or 0) for action in refund_actions
-            )
+            refunded_amount_minor = sum(int(action.amount_minor or 0) for action in refund_actions)
 
             return {
                 "case_count": len(cases),
@@ -360,7 +361,11 @@ class ResolutionOrchestrator:
         history = self.load_conversation_history(db, case_id)
         if user_message:
             last = history[-1] if history else None
-            if not (last is not None and last.sender_role == "buyer" and last.message == user_message.strip()):
+            if not (
+                last is not None
+                and last.sender_role == "buyer"
+                and last.message == user_message.strip()
+            ):
                 history = list(history) + [
                     CaseMessage(
                         case_id=case_id,
@@ -371,6 +376,7 @@ class ResolutionOrchestrator:
 
         tool_executor = None
         if enable_tools:
+
             async def tool_executor(tool_name: str, arguments: dict[str, Any]) -> Any:
                 return await self.execute_tool(db, case_id, tool_name, arguments)
 
@@ -456,9 +462,7 @@ class ResolutionOrchestrator:
         history = conversation_history
         if history is None:
             history = self.load_conversation_history(db, case_id)
-        async for item in self.service.stream_case(
-            db, case_id, conversation_history=history
-        ):
+        async for item in self.service.stream_case(db, case_id, conversation_history=history):
             yield item
 
     # Backward/alternative names for callers and tests.

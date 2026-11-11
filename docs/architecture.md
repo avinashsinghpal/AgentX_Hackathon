@@ -62,7 +62,7 @@ flowchart TD
     end
 
     subgraph Storage ["Persistence Layer"]
-        DB[(PostgreSQL 17 runtime; SQLite supported for tests)]
+        DB[(PostgreSQL 17 runtime)]
         DiskStore[(Isolated File Storage for Photo Proof)]
     end
 

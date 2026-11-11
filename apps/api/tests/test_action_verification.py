@@ -95,9 +95,7 @@ def test_unverified_provider_outcome_does_not_resolve_the_case(db: Session) -> N
     evaluation = PolicyEvaluationService().evaluate_case(db, case, persist=True)
 
     service = ActionService(registry=ProviderRegistry(payment_provider=UnverifiableProvider()))
-    run = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    run = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
 
     db.refresh(case)
     db.refresh(order)
@@ -111,11 +109,7 @@ def test_unverified_provider_outcome_does_not_resolve_the_case(db: Session) -> N
     assert case.decision != "executed"
     assert order.payment_status == "captured"
 
-    attempts = (
-        db.query(ActionVerification)
-        .filter(ActionVerification.action_id == action.id)
-        .all()
-    )
+    attempts = db.query(ActionVerification).filter(ActionVerification.action_id == action.id).all()
     assert len(attempts) == 1
     assert attempts[0].verification_status == "failed"
 
@@ -127,9 +121,7 @@ def test_provider_rejection_is_recorded_without_resolving(db: Session) -> None:
     payment = MockPaymentProvider()
     payment.configure_outcome("refund", "failure")
     service = ActionService(registry=ProviderRegistry(payment_provider=payment))
-    run = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    run = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
 
     db.refresh(case)
     assert run.executed is False
@@ -137,9 +129,7 @@ def test_provider_rejection_is_recorded_without_resolving(db: Session) -> None:
     assert run.reason == "PROVIDER_REJECTED"
     assert case.status != "resolved"
     attempts = (
-        db.query(ActionVerification)
-        .filter(ActionVerification.action_id == run.action.id)
-        .all()
+        db.query(ActionVerification).filter(ActionVerification.action_id == run.action.id).all()
     )
     assert attempts == []
 
@@ -150,9 +140,7 @@ def test_verification_records_every_attempt(db: Session) -> None:
 
     payment = MockPaymentProvider()
     service = ActionService(registry=ProviderRegistry(payment_provider=payment))
-    first = service.execute_for_case(
-        db, case=case, order=order, evaluation=evaluation.result
-    )
+    first = service.execute_for_case(db, case=case, order=order, evaluation=evaluation.result)
     assert first.executed is True
 
     # A second attempt is recorded even though the action already succeeded.

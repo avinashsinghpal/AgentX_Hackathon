@@ -238,11 +238,7 @@ def _reject_policy_content_mutation(mapper: Any, connection: Any, target: Seller
     not routed through the ORM and are only used to flip ``is_active``.
     """
     state = inspect(target)
-    changed = [
-        name
-        for name in IMMUTABLE_POLICY_FIELDS
-        if state.attrs[name].history.has_changes()
-    ]
+    changed = [name for name in IMMUTABLE_POLICY_FIELDS if state.attrs[name].history.has_changes()]
     if changed:
         raise ValueError(
             "Published policy versions are immutable "
@@ -287,4 +283,3 @@ class SellerCustomerLink(Base):
     )
 
     seller: Mapped["Seller"] = relationship("Seller", back_populates="customer_links")
-

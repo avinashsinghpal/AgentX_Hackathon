@@ -1,6 +1,6 @@
 # SellerResolve Database Schema
 
-PostgreSQL is the runtime database. SQLite remains supported for tests and
+PostgreSQL is the only supported application database.
 throwaway local runs. The schema is created exclusively by Alembic
 (`alembic upgrade head`); the application never calls `create_all` outside tests.
 

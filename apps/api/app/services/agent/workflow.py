@@ -15,7 +15,6 @@ class InvalidWorkflowTransition(ValueError):
     """Raised when a requested workflow transition is not allowed."""
 
 
-
 class WorkflowState(StrEnum):
     INTAKE = "intake"
     CLARIFICATION_REQUIRED = "clarification_required"
@@ -41,7 +40,11 @@ VALID_TRANSITIONS: dict[WorkflowState, set[WorkflowState]] = {
     },
     WorkflowState.APPROVAL_PENDING: {WorkflowState.ACTION_EXECUTION, WorkflowState.ESCALATED},
     WorkflowState.ACTION_EXECUTION: {WorkflowState.VERIFICATION, WorkflowState.FAILED_RETRYABLE},
-    WorkflowState.VERIFICATION: {WorkflowState.RESOLVED, WorkflowState.FAILED_RETRYABLE, WorkflowState.ESCALATED},
+    WorkflowState.VERIFICATION: {
+        WorkflowState.RESOLVED,
+        WorkflowState.FAILED_RETRYABLE,
+        WorkflowState.ESCALATED,
+    },
     WorkflowState.FAILED_RETRYABLE: {WorkflowState.INVESTIGATION, WorkflowState.DECISION_PENDING},
     WorkflowState.RESOLVED: set(),
     WorkflowState.ESCALATED: set(),
@@ -74,7 +77,7 @@ def current_workflow_state(case: Any) -> WorkflowState:
         return workflow_state_for_status(getattr(case, "status", "open"))
 
 
-def transition_workflow(case: Any, target: WorkflowState | str, *, allow_same: bool = True) -> WorkflowState:
+def transition_workflow(case: Any, target: WorkflowState | str) -> WorkflowState:
     """Validate and apply a workflow transition to a case-like object."""
     target_state = WorkflowState(target)
     current = current_workflow_state(case)

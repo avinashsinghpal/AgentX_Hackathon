@@ -20,7 +20,7 @@ It is not merely a chatbot. It retrieves trusted order and shipment facts, evalu
 - Backend: FastAPI (`apps/api/`)
 - ORM and migrations: SQLAlchemy and Alembic
 - Runtime database target: PostgreSQL
-- Isolated tests/throwaway runs: SQLite
+- Database: PostgreSQL only
 - Policy validation: Pydantic and deterministic Python rules
 - Operational providers: deterministic mock payment and courier adapters
 - Audit: SHA-256 hash-chained records
@@ -195,7 +195,7 @@ Persisted order/action money is intended to use integer minor units, such as pai
 
 ## 7. Database and ER diagram
 
-PostgreSQL is the intended runtime database. SQLite is used for isolated tests and throwaway runs. Alembic is the schema authority. The application should not create production tables automatically at startup.
+PostgreSQL is the only supported application database. Alembic is the schema authority. The application should not create production tables automatically at startup.
 
 ### ER diagram
 

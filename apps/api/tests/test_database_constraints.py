@@ -179,9 +179,7 @@ def test_policy_evaluations_are_append_only_rows(db: Session) -> None:
 
 def test_audit_chain_state_is_unique_per_chain_key(db: Session) -> None:
     for _ in range(2):
-        db.add(
-            AuditChainState(chain_key="chain-1", last_hash="a" * 64, last_sequence=1)
-        )
+        db.add(AuditChainState(chain_key="chain-1", last_hash="a" * 64, last_sequence=1))
     with pytest.raises(IntegrityError):
         db.flush()
     db.rollback()

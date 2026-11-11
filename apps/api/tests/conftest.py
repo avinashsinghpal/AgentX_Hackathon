@@ -7,11 +7,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-# Ensure test settings before importing app.  SQLite in-memory is the default so
-# the suite runs without external services.  Set TEST_DATABASE_URL (for example
-# postgresql+psycopg://user:pass@localhost:5432/sellerresolve_test) to run the
-# same suite against PostgreSQL; that database is dropped and recreated.
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
+# Integration tests require PostgreSQL.  Set TEST_DATABASE_URL to a dedicated
+# PostgreSQL database; it is dropped and recreated by the session fixture.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if not TEST_DATABASE_URL:
+    raise RuntimeError(
+        "TEST_DATABASE_URL must point to PostgreSQL for the integration test suite, "
+        "for example postgresql+psycopg://sellerresolve:password@localhost:5432/sellerresolve_test"
+    )
 os.environ["ENV"] = "testing"
 os.environ["SECRET_KEY"] = "test-secret-key-32-chars-minimum-abcdef123456"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL

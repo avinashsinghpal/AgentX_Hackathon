@@ -9,6 +9,7 @@ through this module, so the two representations cannot silently diverge.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -26,27 +27,70 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _legacy_money_to_minor(value: Any) -> int:
+    """Convert an inferred legacy monetary value to integer minor units.
+
+    Integers and integral Decimals are already minor units. Floats are major
+    units. Strings are parsed as Decimals and follow the same rule.
+    """
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(round(value * 100))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+    if parsed == parsed.to_integral_value():
+        return int(parsed)
+    try:
+        return int((parsed * 100).to_integral_value())
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _explicit_minor_to_int(value: Any) -> int:
+    """Coerce a value already expressed in minor units to an integer."""
+    if isinstance(value, bool) or value is None:
+        return 0
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+    try:
+        return int(parsed.to_integral_value(rounding=ROUND_HALF_EVEN))
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return 0
+
+
 def item_price_minor_from_legacy(item: dict[str, Any]) -> int:
     """Best-effort minor-unit price for legacy JSON order lines.
 
-    New writes always use ``unit_price_minor``.  Legacy data used either integer
-    minor units (demo seed) or float major units (older fixtures); integers are
-    treated as minor units and floats as major units.
+    Explicit minor-unit fields always take precedence. Inferred legacy values
+    use integer-minor/float-major conversion.
     """
-    if isinstance(item.get("unit_price_minor"), int):
-        return int(item["unit_price_minor"])
+    if not isinstance(item, dict):
+        return 0
+
+    if item.get("unit_price_minor") is not None:
+        return _explicit_minor_to_int(item.get("unit_price_minor"))
+    if item.get("total_price_minor") is not None:
+        return _explicit_minor_to_int(item.get("total_price_minor"))
+
     unit_price = item.get("unit_price")
-    if isinstance(unit_price, bool):
-        unit_price = None
-    if isinstance(unit_price, int):
-        return unit_price
-    if isinstance(unit_price, float):
-        return int(round(unit_price * 100))
+    if unit_price is not None and not isinstance(unit_price, bool):
+        return _legacy_money_to_minor(unit_price)
     total_price = item.get("total_price")
-    if isinstance(total_price, int):
-        return total_price
-    if isinstance(total_price, float):
-        return int(round(total_price * 100))
+    if total_price is not None and not isinstance(total_price, bool):
+        return _legacy_money_to_minor(total_price)
+    price = item.get("price")
+    if price is not None and not isinstance(price, bool):
+        return _legacy_money_to_minor(price)
     return 0
 
 

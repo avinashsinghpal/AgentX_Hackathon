@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -265,22 +266,41 @@ def scheduled_monitor_tick() -> None:
     """Invoked on periodic scheduler interval."""
     try:
         with SessionLocal() as db:
-            remedies = run_delay_monitor_cycle(db)
-            if remedies:
-                logger.info(
-                    "Proactive delay monitor executed %d remedies: %s", len(remedies), remedies
-                )
+            try:
+                acquired = db.execute(text("SELECT pg_try_advisory_lock(424242)")).scalar()
+            except Exception:
+                acquired = True
+            if not acquired:
+                logger.debug("Proactive delay monitor skipped: another worker holds the lock")
+                return
+            try:
+                remedies = run_delay_monitor_cycle(db)
+                if remedies:
+                    logger.info(
+                        "Proactive delay monitor executed %d remedies: %s",
+                        len(remedies),
+                        remedies,
+                    )
+            finally:
+                try:
+                    db.execute(text("SELECT pg_advisory_unlock(424242)"))
+                    db.commit()
+                except Exception:
+                    pass
     except Exception as exc:
         logger.error("Error during scheduled monitor tick: %s", exc)
 
 
 def start_proactive_monitor() -> None:
     if not scheduler.running:
+        interval_minutes = max(1, int(settings.PROACTIVE_MONITOR_INTERVAL_MINUTES or 60))
         scheduler.add_job(
             scheduled_monitor_tick,
             "interval",
-            seconds=60,
+            minutes=interval_minutes,
             id="proactive_delay_monitor",
+            coalesce=True,
+            max_instances=1,
         )
         scheduler.start()
         logger.info(

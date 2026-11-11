@@ -184,9 +184,7 @@ class PolicyConfigurationService:
             policy.delays.compensation_per_day_late > 0
             and policy.delays.max_delay_compensation == 0
         ):
-            warnings.append(
-                "Delay compensation is disabled because max_delay_compensation is 0."
-            )
+            warnings.append("Delay compensation is disabled because max_delay_compensation is 0.")
         if (
             policy.damage_claims.require_warehouse_inspection_above
             and policy.damage_claims.require_warehouse_inspection_above
@@ -202,9 +200,7 @@ class PolicyConfigurationService:
         """Structured input is already schema-validated; enforce publication invariants."""
         return policy
 
-    def validate_yaml(
-        self, yaml_text: str
-    ) -> tuple[PolicySchema | None, str | None]:
+    def validate_yaml(self, yaml_text: str) -> tuple[PolicySchema | None, str | None]:
         is_valid, parsed, error = parse_and_validate_yaml(yaml_text)
         return (parsed if is_valid else None), error
 
@@ -225,9 +221,7 @@ class PolicyConfigurationService:
         has_config = config is not None
         has_yaml = bool(policy_yaml and policy_yaml.strip())
         if has_config == has_yaml:
-            raise PolicyValidationError(
-                "Provide exactly one of a structured config or raw YAML."
-            )
+            raise PolicyValidationError("Provide exactly one of a structured config or raw YAML.")
 
         if config is not None:
             policy = config
@@ -245,10 +239,7 @@ class PolicyConfigurationService:
         # makes concurrent publications wait and then observe the winner's
         # committed state; SQLite serializes writers at the database level.
         locked_seller = (
-            self.db.query(Seller)
-            .filter(Seller.id == seller.id)
-            .with_for_update()
-            .one_or_none()
+            self.db.query(Seller).filter(Seller.id == seller.id).with_for_update().one_or_none()
         )
         if locked_seller is None:
             raise PolicyNotFoundError("Seller profile no longer exists.")
@@ -265,10 +256,7 @@ class PolicyConfigurationService:
         )
         previous_version = active_rows[0].version if active_rows else 0
 
-        if (
-            expected_active_version is not None
-            and expected_active_version != previous_version
-        ):
+        if expected_active_version is not None and expected_active_version != previous_version:
             raise PolicyConflictError(
                 "The active policy changed while you were editing "
                 f"(expected v{expected_active_version}, active v{previous_version}). "

@@ -71,9 +71,7 @@ def test_structured_config_converts_to_canonical_yaml(client: TestClient) -> Non
     assert active["valid"] is True
 
     config = copy.deepcopy(active["config"])
-    config["returns"].update(
-        {"window_days": 10, "eligible_categories": ["apparel", "electronics"]}
-    )
+    config["returns"].update({"window_days": 10, "eligible_categories": ["apparel", "electronics"]})
     config["refunds"].update(
         {
             "auto_approve_up_to": 2000,
@@ -89,14 +87,10 @@ def test_structured_config_converts_to_canonical_yaml(client: TestClient) -> Non
             "max_delay_compensation": 250,
         }
     )
-    config["damage_claims"].update(
-        {"auto_replacement_under_amount": 1500, "report_within_days": 4}
-    )
+    config["damage_claims"].update({"auto_replacement_under_amount": 1500, "report_within_days": 4})
     config["fraud_checks"].update({"max_refunds_per_buyer_per_30_days": 2})
 
-    validated = client.post(
-        f"{POLICIES}/validate-config", headers=headers, json={"config": config}
-    )
+    validated = client.post(f"{POLICIES}/validate-config", headers=headers, json={"config": config})
     assert validated.status_code == 200, validated.text
     body = validated.json()
     assert body["valid"] is True
@@ -253,9 +247,7 @@ def test_invalid_configurations_are_rejected(client: TestClient) -> None:
 
     wrong_currency = copy.deepcopy(config)
     wrong_currency["currency"] = "USD"
-    preview = client.post(
-        f"{POLICIES}/preview", headers=headers, json={"config": wrong_currency}
-    )
+    preview = client.post(f"{POLICIES}/preview", headers=headers, json={"config": wrong_currency})
     assert preview.status_code == 400
     assert "does not match the store currency" in preview.json()["error"]["message"]
 
@@ -266,9 +258,7 @@ def test_invalid_configurations_are_rejected(client: TestClient) -> None:
     )
     assert invalid_yaml.status_code == 400
 
-    missing_source = client.post(
-        f"{POLICIES}/publish", headers=headers, json={"confirm": True}
-    )
+    missing_source = client.post(f"{POLICIES}/publish", headers=headers, json={"confirm": True})
     assert missing_source.status_code == 422
 
 
@@ -352,8 +342,7 @@ def test_publication_requires_confirmation_and_creates_immutable_versions(
     assert isinstance(stored.parsed_rules["refunds"]["auto_approve_up_to"], int)
 
     audit_actions = [
-        row.action
-        for row in db.query(AuditLog).filter(AuditLog.seller_id == seller.id).all()
+        row.action for row in db.query(AuditLog).filter(AuditLog.seller_id == seller.id).all()
     ]
     assert audit_actions.count("policy.published") == 2
 

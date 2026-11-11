@@ -180,6 +180,7 @@ class ApprovalService:
         reason: str,
         actor_role: str = "system",
         actor_id: str | None = None,
+        commit: bool = True,
     ) -> None:
         approval.status = "cancelled"
         approval.decision_reason = reason
@@ -194,7 +195,10 @@ class ApprovalService:
             payload={"approval_id": approval.id, "reason": reason},
             commit=False,
         )
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
 
     # ------------------------------------------------------------------ decision
     def decide(
@@ -220,9 +224,7 @@ class ApprovalService:
             raise ApprovalNotFoundError("Approval request not found.")
 
         if approval.status != "pending":
-            raise ApprovalStateError(
-                f"This request has already been decided ({approval.status})."
-            )
+            raise ApprovalStateError(f"This request has already been decided ({approval.status}).")
 
         if approval.expires_at is not None:
             expires_at = approval.expires_at

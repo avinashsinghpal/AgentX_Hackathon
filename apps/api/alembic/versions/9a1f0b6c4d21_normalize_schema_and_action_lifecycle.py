@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from typing import Any
 
 import sqlalchemy as sa
@@ -62,10 +62,45 @@ def _parse_json(value: Any, default: Any) -> Any:
 
 
 def _to_minor(value: Any) -> int:
+    """Convert a legacy monetary value to integer minor units.
+
+    Integer values are already minor units (demo seed and normalized data).
+    Float values are major units and are converted once.  This mirrors
+    ``app.services.orders.item_price_minor_from_legacy`` so migration backfill
+    cannot double-convert integer minor-unit values.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(round(value * 100))
+        except (InvalidOperation, TypeError, ValueError, OverflowError):
+            return 0
     try:
-        return int((Decimal(str(value)) * 100).quantize(Decimal("1")))
+        parsed = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return 0
+    if parsed == parsed.to_integral_value():
+        return int(parsed)
+    try:
+        return int((parsed * 100).to_integral_value())
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _explicit_minor_or_legacy(explicit: Any, legacy: Any) -> int:
+    if isinstance(explicit, bool) or explicit is None:
+        return _to_minor(legacy)
+    try:
+        parsed = Decimal(str(explicit))
+    except (InvalidOperation, TypeError, ValueError):
+        return _to_minor(legacy)
+    try:
+        return int(parsed.to_integral_value(rounding=ROUND_HALF_EVEN))
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return _to_minor(legacy)
 
 
 def _parse_timestamp(value: Any) -> datetime:
@@ -397,8 +432,9 @@ def _backfill_order_items(bind: sa.engine.Connection) -> None:
                     "sku": item.get("sku"),
                     "title": str(item.get("title") or item.get("name") or "Item"),
                     "quantity": quantity,
-                    "unit_price_minor": _to_minor(
-                        item.get("unit_price", item.get("price", 0))
+                    "unit_price_minor": _explicit_minor_or_legacy(
+                        item.get("unit_price_minor"),
+                        item.get("unit_price", item.get("price", 0)),
                     ),
                     "returnable": bool(item.get("returnable", True)),
                     "category": item.get("category"),

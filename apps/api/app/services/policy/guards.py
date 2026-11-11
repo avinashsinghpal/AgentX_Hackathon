@@ -222,9 +222,7 @@ def check_evidence_requirement(
     )
 
 
-def check_buyer_refund_history(
-    refund_count_30d: int, maximum: int, escalate: bool
-) -> CheckResult:
+def check_buyer_refund_history(refund_count_30d: int, maximum: int, escalate: bool) -> CheckResult:
     passed = refund_count_30d <= maximum
     return CheckResult(
         check="buyer_refund_history",
