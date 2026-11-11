@@ -24,6 +24,7 @@ from app.services.audit import AuditLogService
 from app.services.llm.client import LLMClient, LLMMessage, get_llm_client
 from app.services.policy.evaluator import CaseEvaluation, PolicyEvaluationService
 from app.services.policy.result import Decision, EvaluationResult
+from app.services.risk import RiskEvaluationService, RiskResult
 
 
 class ResolutionError(Exception):
@@ -55,6 +56,7 @@ class DecisionOutcome:
     approval: ApprovalRequest | None
     action_run: ActionRun | None
     steps: list[dict[str, Any]]
+    risk_evaluation: RiskResult | None = None
 
 
 @dataclass
@@ -69,6 +71,7 @@ class ResolutionOutcome:
     steps: list[dict[str, Any]]
     explanation: str
     message: CaseMessage | None
+    risk_evaluation: RiskResult | None = None
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -86,11 +89,13 @@ class ResolutionService:
         self,
         llm_client: LLMClient | None = None,
         evaluation_service: PolicyEvaluationService | None = None,
+        risk_evaluation_service: RiskEvaluationService | None = None,
         action_service: ActionService | None = None,
         approval_service: ApprovalService | None = None,
     ) -> None:
         self.llm = llm_client or get_llm_client()
         self.evaluations = evaluation_service or PolicyEvaluationService()
+        self.risk_evaluations = risk_evaluation_service or RiskEvaluationService()
         self.actions = action_service or ActionService()
         self.approvals = approval_service or ApprovalService(self.actions)
 
@@ -161,6 +166,13 @@ class ResolutionService:
         order = investigation.order
         evaluated_at = now or datetime.now(UTC)
 
+        # Risk evaluation is separate from policy evaluation.  It can inform
+        # escalation and audit data, but it cannot change the policy decision,
+        # financial amount or proposed action.
+        risk_evaluation = self.risk_evaluations.evaluate_case(
+            db, case, now=evaluated_at
+        )
+
         evaluation: CaseEvaluation = self.evaluations.evaluate_case(
             db, case, now=evaluated_at, persist=True
         )
@@ -193,6 +205,8 @@ class ResolutionService:
                 "reason_code": result.reason_code,
                 "policy_version": result.policy_version,
                 "evaluation_id": record_id,
+                "risk_flags": [flag.code for flag in risk_evaluation.flags],
+                "risk_data_sufficiency": risk_evaluation.data_sufficiency.value,
             }
             AuditLogService.log_action(
                 db=db,
@@ -287,6 +301,7 @@ class ResolutionService:
             approval=approval,
             action_run=action_run,
             steps=steps,
+            risk_evaluation=risk_evaluation,
         )
 
     # -------------------------------------------------------------------- explain
@@ -423,6 +438,7 @@ listed here.
             steps=investigation.steps + decision.steps,
             explanation=explanation,
             message=message,
+            risk_evaluation=decision.risk_evaluation,
         )
 
     async def stream_case(
