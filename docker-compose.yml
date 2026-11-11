@@ -32,6 +32,10 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       SECRET_KEY: ${SECRET_KEY:-c1cc68ec7313eede0b6709d33279a3050d6b5960441f414d897bfdceeee2216d}
       CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+      LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      LLM_MODEL: ${LLM_MODEL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - api-uploads:/app/uploads
     depends_on:

@@ -6,6 +6,7 @@ amounts or LLM output.  All values are supplied by the risk evaluation service.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -97,4 +98,9 @@ class RiskEvaluationInput(BaseModel):
             "has_customer_history",
             "customer_history_available",
         ),
+    )
+
+    now: datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices("now", "evaluated_at"),
     )

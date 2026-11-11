@@ -23,7 +23,12 @@ from app.models.shipment import Shipment
 from app.services.actions.service import ActionRun, ActionService
 from app.services.approvals import ApprovalService
 from app.services.audit import AuditLogService
-from app.services.llm.client import LLMClient, LLMMessage, get_llm_client
+from app.services.llm.client import (
+    GeminiLLMClient,
+    LLMClient,
+    LLMMessage,
+    get_llm_client,
+)
 from app.services.policy.evaluator import CaseEvaluation, PolicyEvaluationService
 from app.services.policy.result import Decision, EvaluationResult
 from app.services.risk import RiskEvaluationService, RiskResult
@@ -444,6 +449,7 @@ listed here.
         conversation_history: list[CaseMessage] | None = None,
         tool_executor: Any = None,
         max_tool_calls: int = 0,
+        tool_declarations: list[dict[str, Any]] | None = None,
     ) -> str:
         messages = self.build_messages(
             investigation, decision, conversation_history=conversation_history
@@ -458,6 +464,17 @@ listed here.
             except Exception:
                 # A generation failure must never roll back or alter the verified
                 # policy decision or an already-completed action.
+                return fallback
+
+        declarations = tool_declarations or []
+        if isinstance(self.llm, GeminiLLMClient) and declarations:
+            try:
+                text = await self.llm.generate_with_tools(
+                    messages, declarations, tool_executor, max_tool_calls
+                )
+                text = (text or "").strip()
+                return text or fallback
+            except Exception:
                 return fallback
 
         used_calls = 0
@@ -511,6 +528,7 @@ listed here.
         conversation_history: list[CaseMessage] | None = None,
         tool_executor: Any = None,
         max_tool_calls: int = 0,
+        tool_declarations: list[dict[str, Any]] | None = None,
     ) -> ResolutionOutcome:
         investigation = self.investigate(db, case_id)
         decision = self.decide(
@@ -522,6 +540,7 @@ listed here.
             conversation_history=conversation_history,
             tool_executor=tool_executor,
             max_tool_calls=max_tool_calls,
+            tool_declarations=tool_declarations,
         )
 
         message: CaseMessage | None = None

@@ -51,6 +51,13 @@ def sanitize_no_emoji(text: str) -> str:
 
 
 class LLMClient(ABC):
+    @property
+    def provider_name(self) -> str:
+        return "unknown"
+
+    @property
+    def model_name(self) -> str:
+        return ""
     @abstractmethod
     async def generate_response(
         self,
@@ -70,6 +77,14 @@ class LLMClient(ABC):
 
 class FakeLLMClient(LLMClient):
     """Deterministic offline mock LLM client for tests and predictable scenarios."""
+
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
 
     async def generate_response(
         self,
@@ -145,6 +160,14 @@ class GeminiLLMClient(LLMClient):
         self.model = model
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
+    @property
+    def provider_name(self) -> str:
+        return "gemini"
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
     async def generate_response(
         self,
         messages: list[LLMMessage],
@@ -175,16 +198,18 @@ class GeminiLLMClient(LLMClient):
                 res = await client.post(url, json=payload)
                 if res.status_code != 200:
                     logger.error("Gemini API error: %s", res.text)
-                    fallback = FakeLLMClient()
-                    return await fallback.generate_response(messages, temperature)
+                    raise LLMProviderError(
+                        f"Gemini request failed with HTTP {res.status_code}"
+                    )
 
                 data = res.json()
                 raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
                 return LLMResponse(text=sanitize_no_emoji(raw_text))
+        except LLMProviderError:
+            raise
         except Exception as exc:
             logger.error("Exception calling Gemini: %s", exc)
-            fallback = FakeLLMClient()
-            return await fallback.generate_response(messages, temperature)
+            raise LLMProviderError("Gemini request failed") from exc
 
     async def stream_response(
         self,
@@ -196,13 +221,214 @@ class GeminiLLMClient(LLMClient):
         for w in words:
             yield w + " "
 
+    async def generate_with_tools(
+        self,
+        messages: list[LLMMessage],
+        tool_declarations: list[dict[str, Any]],
+        tool_executor: Any,
+        max_calls: int,
+        temperature: float = 0.1,
+    ) -> str:
+        """Run a native Gemini function-calling loop and return final text."""
+        system_instruction = ZERO_EMOJI_SYSTEM_PROMPT
+        contents: list[dict[str, Any]] = []
+        for message in messages:
+            if message.role == "system":
+                system_instruction += "\n" + message.content
+            else:
+                role = "user" if message.role == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": message.content}]})
+
+        declarations = []
+        for tool in tool_declarations:
+            declarations.append(
+                {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
+
+        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        used_calls = 0
+        while used_calls < max(max_calls, 1):
+            payload: dict[str, Any] = {
+                "system_instruction": {"parts": [{"text": system_instruction}]},
+                "contents": contents,
+                "generationConfig": {"temperature": temperature, "maxOutputTokens": 1024},
+            }
+            if declarations:
+                payload["tools"] = [{"functionDeclarations": declarations}]
+
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post(url, json=payload)
+                    if res.status_code != 200:
+                        raise LLMProviderError(
+                            f"Gemini request failed with HTTP {res.status_code}"
+                        )
+                    data = res.json()
+            except LLMProviderError:
+                raise
+            except Exception as exc:
+                raise LLMProviderError("Gemini request failed") from exc
+
+            candidate = (data.get("candidates") or [{}])[0]
+            content = candidate.get("content") or {}
+            parts = content.get("parts") or []
+            function_calls = [part.get("functionCall") for part in parts if part.get("functionCall")]
+            if not function_calls:
+                text_parts = [part.get("text", "") for part in parts if part.get("text")]
+                return sanitize_no_emoji("".join(text_parts).strip())
+
+            # Execute the first function call and feed its result back.
+            function_call = function_calls[0]
+            tool_name = str(function_call.get("name") or "")
+            arguments = function_call.get("args") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            contents.append({"role": "model", "parts": [{"functionCall": function_call}]})
+            try:
+                observation = await tool_executor(tool_name, arguments)
+            except Exception as exc:
+                observation = {"error": str(exc)}
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "name": tool_name,
+                                "response": {"result": observation},
+                            }
+                        }
+                    ],
+                }
+            )
+            used_calls += 1
+
+        return ""
+
+
+class LLMProviderError(RuntimeError):
+    """Raised when a configured LLM provider request fails."""
+
+
+class LLMConfigurationError(RuntimeError):
+    """Raised when a requested LLM provider is missing required configuration."""
+
+
+class AnthropicLLMClient(LLMClient):
+    """Live LLM client using Anthropic Claude via the official SDK."""
+
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+        self.api_key = api_key
+        self.model = model
+
+    @property
+    def provider_name(self) -> str:
+        return "anthropic"
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    async def generate_response(
+        self,
+        messages: list[LLMMessage],
+        temperature: float = 0.1,
+    ) -> LLMResponse:
+        try:
+            import anthropic
+
+            client = anthropic.AsyncAnthropic(api_key=self.api_key)
+            system_parts: list[str] = [ZERO_EMOJI_SYSTEM_PROMPT]
+            converted: list[dict[str, Any]] = []
+            for message in messages:
+                if message.role == "system":
+                    system_parts.append(message.content)
+                else:
+                    role = "user" if message.role == "user" else "assistant"
+                    converted.append({"role": role, "content": message.content})
+
+            response = await client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                system="\n".join(part for part in system_parts if part),
+                messages=converted or [{"role": "user", "content": ""}],  # type: ignore[arg-type]
+            )
+            raw_text = ""
+            for block in getattr(response, "content", []) or []:
+                if getattr(block, "type", None) == "text":
+                    raw_text += getattr(block, "text", "")
+            return LLMResponse(text=sanitize_no_emoji(raw_text))
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            logger.error("Exception calling Anthropic: %s", exc)
+            raise LLMProviderError("Anthropic request failed") from exc
+
+    async def stream_response(
+        self,
+        messages: list[LLMMessage],
+        temperature: float = 0.1,
+    ) -> AsyncGenerator[str, None]:
+        res = await self.generate_response(messages, temperature)
+        words = res.text.split(" ")
+        for word in words:
+            yield word + " "
+
+
+async def verify_llm_configuration() -> dict[str, Any]:
+    """Make a minimal provider request and report non-secret diagnostics."""
+    client = get_llm_client()
+    response = await client.generate_response(
+        [LLMMessage(role="user", content="Reply with OK only.")]
+    )
+    return {
+        "provider": client.provider_name,
+        "model": client.model_name,
+        "verified": bool((response.text or "").strip()),
+    }
+
 
 def get_llm_client() -> LLMClient:
-    """Returns the appropriate LLMClient based on environment configuration."""
-    api_key = getattr(settings, "GEMINI_API_KEY", None)
-    provider = getattr(settings, "LLM_PROVIDER", "fake")
+    """Returns the appropriate LLMClient based on environment configuration.
 
-    if provider == "gemini" and api_key and api_key.strip():
-        return GeminiLLMClient(api_key=api_key.strip())
+    A provider that requires credentials raises ``LLMConfigurationError`` when
+    those credentials are absent, so missing configuration is reported clearly
+    instead of silently falling back to the mock client.
+    """
+    provider = str(getattr(settings, "LLM_PROVIDER", "fake") or "fake").strip().lower()
+    model = str(getattr(settings, "LLM_MODEL", "") or "").strip()
 
-    return FakeLLMClient()
+    if provider in {"fake", "mock", "offline"}:
+        return FakeLLMClient()
+
+    if provider == "gemini":
+        api_key = getattr(settings, "GEMINI_API_KEY", None)
+        if not api_key or not str(api_key).strip():
+            raise LLMConfigurationError(
+                "LLM_PROVIDER is set to 'gemini' but GEMINI_API_KEY is not configured. "
+                "Set GEMINI_API_KEY in apps/api/.env or set LLM_PROVIDER=fake."
+            )
+        return GeminiLLMClient(
+            api_key=str(api_key).strip(),
+            model=model or "gemini-2.5-flash",
+        )
+
+    if provider in {"anthropic", "claude"}:
+        api_key = getattr(settings, "ANTHROPIC_API_KEY", None)
+        if not api_key or not str(api_key).strip():
+            raise LLMConfigurationError(
+                "LLM_PROVIDER is set to 'anthropic' but ANTHROPIC_API_KEY is not configured. "
+                "Set ANTHROPIC_API_KEY in apps/api/.env or set LLM_PROVIDER=fake."
+            )
+        return AnthropicLLMClient(
+            api_key=str(api_key).strip(),
+            model=model or "claude-3-5-sonnet-20241022",
+        )
+
+    raise LLMConfigurationError(
+        f"Unsupported LLM_PROVIDER {provider!r}. Use 'fake', 'gemini', or 'anthropic'."
+    )

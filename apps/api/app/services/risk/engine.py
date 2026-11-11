@@ -71,7 +71,9 @@ class RiskEngine:
                 values = {}
             inputs = RiskEvaluationInput(**values, **kwargs)
 
-        evaluated_at = datetime.now(UTC)
+        evaluated_at = inputs.now if getattr(inputs, "now", None) is not None else datetime.now(UTC)
+        if evaluated_at.tzinfo is None:
+            evaluated_at = evaluated_at.replace(tzinfo=UTC)
         flags: list[RiskFlag] = []
 
         # 1. Refund frequency.  The threshold comes from the seller policy's
@@ -177,9 +179,8 @@ def _data_sufficiency(inputs: RiskEvaluationInput) -> DataSufficiency:
         history_count = 1 if inputs.history_available else 0
 
     if history_count is None:
-        # No reliable history signal was supplied.  Do not treat the absence of
-        # an explicit count as proof that history is missing.
-        return DataSufficiency.SUFFICIENT
+        # No reliable history signal was supplied; do not claim sufficiency.
+        return DataSufficiency.INSUFFICIENT_DATA
 
     if history_count <= 0:
         return DataSufficiency.INSUFFICIENT_DATA

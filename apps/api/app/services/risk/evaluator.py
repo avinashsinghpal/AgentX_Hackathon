@@ -100,6 +100,7 @@ class RiskEvaluationService:
             ),
             customer_history_count=history_count,
             history_available=buyer is not None,
+            now=evaluated_at,
         )
 
         return self.engine.evaluate(inputs)
@@ -139,5 +140,6 @@ class RiskEvaluationService:
             ),
             customer_history_count=history_count,
             history_available=buyer is not None,
+            now=evaluated_at,
         )
         return self.engine.evaluate(inputs)

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseMessage
 from app.models.order import Order
+from app.services.agent.tool_schemas import TOOL_INPUT_SCHEMAS, validate_tool_arguments
 from app.services.agent.tools import ResolutionTools
 from app.services.approvals import ApprovalService
 from app.services.llm.client import LLMClient, get_llm_client
@@ -81,19 +82,39 @@ class ResolutionOrchestrator:
             },
         ]
 
+    @property
+    def tool_declarations(self) -> list[dict[str, Any]]:
+        declarations: list[dict[str, Any]] = []
+        for tool in self.available_tools():
+            name = tool["name"]
+            schema_cls = TOOL_INPUT_SCHEMAS.get(name)
+            parameters = {"type": "object", "properties": {}, "additionalProperties": False}
+            if schema_cls is not None:
+                parameters = schema_cls.model_json_schema()
+            declarations.append(
+                {
+                    "name": name,
+                    "description": tool["description"],
+                    "parameters": parameters,
+                }
+            )
+        return declarations
+
     def load_conversation_history(
         self,
         db: Session,
         case_id: str,
         limit: int = 20,
     ) -> list[CaseMessage]:
-        return (
+        messages = (
             db.query(CaseMessage)
             .filter(CaseMessage.case_id == case_id)
-            .order_by(CaseMessage.created_at.asc())
+            .order_by(CaseMessage.created_at.desc())
             .limit(limit)
             .all()
         )
+        messages.reverse()
+        return messages
 
     async def execute_tool(
         self,
@@ -103,6 +124,7 @@ class ResolutionOrchestrator:
         arguments: dict[str, Any] | None = None,
     ) -> Any:
         arguments = arguments or {}
+        arguments = validate_tool_arguments(tool_name, arguments)
         case = db.query(Case).filter(Case.id == case_id).first()
         if case is None:
             raise ValueError(f"Case {case_id} not found")
@@ -116,15 +138,8 @@ class ResolutionOrchestrator:
             raise ValueError("Tool case_id does not match the current case")
 
         requested_order_id = arguments.get("order_id")
-        if requested_order_id is not None:
-            requested_order = db.query(Order).filter(Order.id == str(requested_order_id)).first()
-            if requested_order is None:
-                raise ValueError(f"Order {requested_order_id} not found")
-            if requested_order.seller_id != case.seller_id or (
-                case.buyer_id is not None and requested_order.buyer_id not in {None, case.buyer_id}
-            ):
-                raise ValueError("Tool order does not belong to this case")
-            order = requested_order
+        if requested_order_id is not None and str(requested_order_id) != str(case.order_id):
+            raise ValueError("Tool order_id does not match the authenticated case order")
 
         if tool_name == "lookup_order":
             return ResolutionTools.lookup_order(db, order.id) or {}
@@ -221,13 +236,15 @@ class ResolutionOrchestrator:
 
         history = self.load_conversation_history(db, case_id)
         if user_message:
-            history = list(history) + [
-                CaseMessage(
-                    case_id=case_id,
-                    sender_role="buyer",
-                    message=user_message,
-                )
-            ]
+            last = history[-1] if history else None
+            if not (last is not None and last.sender_role == "buyer" and last.message == user_message.strip()):
+                history = list(history) + [
+                    CaseMessage(
+                        case_id=case_id,
+                        sender_role="buyer",
+                        message=user_message,
+                    )
+                ]
 
         tool_executor = None
         if enable_tools:
@@ -241,6 +258,7 @@ class ResolutionOrchestrator:
             conversation_history=history,
             tool_executor=tool_executor,
             max_tool_calls=calls,
+            tool_declarations=self.tool_declarations,
         )
         if outcome.message is None:  # pragma: no cover - persist_message defaults True
             raise RuntimeError("Resolution did not persist an agent message")
