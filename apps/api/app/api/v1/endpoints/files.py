@@ -11,9 +11,9 @@ from app.services.evidence import can_access_case, can_access_file
 from app.services.upload import FileUploadService
 
 router = APIRouter(prefix="/files", tags=["Evidence & Files"])
+uploads_router = APIRouter(prefix="/uploads", tags=["Evidence & Files"])
 
 
-@router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_file(
     db: DbSession,
     current_user: CurrentUser,
@@ -39,16 +39,18 @@ async def upload_file(
         uploader=current_user,
         case_id=case_id,
     )
+    file_url = f"/api/v1/files/{record.id}"
     return {
         "file_id": record.id,
+        "id": record.id,
         "filename": record.original_filename,
         "mime_type": record.mime_type,
         "size_bytes": record.file_size_bytes,
-        "url": f"/api/v1/files/{record.id}",
+        "url": file_url,
+        "file_url": file_url,
     }
 
 
-@router.get("/{file_id}")
 def get_file(
     file_id: str,
     db: DbSession,
@@ -80,3 +82,9 @@ def get_file(
         media_type=record.mime_type,
         filename=record.original_filename,
     )
+
+
+router.add_api_route("/upload", upload_file, methods=["POST"], status_code=status.HTTP_201_CREATED)
+router.add_api_route("/{file_id}", get_file, methods=["GET"])
+uploads_router.add_api_route("", upload_file, methods=["POST"], status_code=status.HTTP_201_CREATED)
+uploads_router.add_api_route("/{file_id}", get_file, methods=["GET"])

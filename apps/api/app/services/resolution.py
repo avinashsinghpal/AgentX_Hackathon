@@ -34,6 +34,31 @@ from app.services.policy.result import Decision, EvaluationResult
 from app.services.risk import RiskEvaluationService, RiskResult
 
 
+def validate_explanation(
+    text: str,
+    decision: DecisionOutcome,
+    investigation: Investigation,
+) -> bool:
+    """Validate that an LLM explanation does not contradict deterministic facts."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    badge = decision.badge
+    order = investigation.order
+    amount_text = f"{order.currency} {_money(decision.evaluation.eligible_amount_minor)}"
+    lowered = cleaned.lower()
+    if badge == "executed" and "no financial action" in lowered:
+        return False
+    if badge in {"needs_approval", "not_eligible"} and "has been executed" in lowered:
+        return False
+    if badge == "executed" and amount_text not in cleaned and str(decision.evaluation.eligible_amount_minor) not in cleaned:
+        # Allow the explanation to describe the action without repeating the exact
+        # formatted amount, but require the raw minor amount when it is nonzero.
+        if decision.evaluation.eligible_amount_minor:
+            return False
+    return True
+
+
 class ResolutionError(Exception):
     """Base class for resolution failures."""
 
@@ -193,6 +218,8 @@ class ResolutionService:
         case = investigation.case
         order = investigation.order
         evaluated_at = now or datetime.now(UTC)
+        if hasattr(case, "workflow_state"):
+            case.workflow_state = "decision_pending"
 
         # Risk evaluation is separate from policy evaluation.  It can inform
         # escalation and audit data, but it cannot change the policy decision,
@@ -227,6 +254,8 @@ class ResolutionService:
         if result.decision is Decision.NOT_ELIGIBLE:
             case.status = "rejected"
             case.decision = "not_eligible"
+            if hasattr(case, "workflow_state"):
+                case.workflow_state = "resolved"
             case.resolved_at = evaluated_at
             case.outcome_details = {
                 "rejected": True,
@@ -264,6 +293,8 @@ class ResolutionService:
             )
 
         elif result.decision in {Decision.NEEDS_APPROVAL, Decision.MANUAL_REVIEW} or high_risk:
+            if hasattr(case, "workflow_state"):
+                case.workflow_state = "approval_pending"
             approval = self.approvals.request_for_evaluation(
                 db,
                 case=case,
@@ -293,6 +324,8 @@ class ResolutionService:
             )
 
         else:
+            if hasattr(case, "workflow_state"):
+                case.workflow_state = "action_execution"
             action_run = self.actions.execute_for_case(
                 db,
                 case=case,
@@ -304,6 +337,8 @@ class ResolutionService:
             )
             if action_run.executed:
                 badge = "executed"
+                if hasattr(case, "workflow_state"):
+                    case.workflow_state = "verification"
                 steps.append(
                     {
                         "tool_name": "verify_action_outcome",
@@ -315,8 +350,12 @@ class ResolutionService:
                         "timestamp": evaluated_at.isoformat(),
                     }
                 )
+                if hasattr(case, "workflow_state"):
+                    case.workflow_state = "resolved"
             else:
                 badge = "needs_approval"
+                if hasattr(case, "workflow_state"):
+                    case.workflow_state = "failed_retryable"
                 steps.append(
                     {
                         "tool_name": "verify_action_outcome",
@@ -460,7 +499,9 @@ listed here.
             try:
                 response = await self.llm.generate_response(messages)
                 text = (response.text or "").strip()
-                return text or fallback
+                if not text or not validate_explanation(text, decision, investigation):
+                    return fallback
+                return text
             except Exception:
                 # A generation failure must never roll back or alter the verified
                 # policy decision or an already-completed action.
@@ -473,7 +514,9 @@ listed here.
                     messages, declarations, tool_executor, max_tool_calls
                 )
                 text = (text or "").strip()
-                return text or fallback
+                if not text or not validate_explanation(text, decision, investigation):
+                    return fallback
+                return text
             except Exception:
                 return fallback
 
@@ -486,14 +529,18 @@ listed here.
             text = (response.text or "").strip()
             tool_request = _parse_tool_request(text)
             if tool_request is None:
-                return text or fallback
+                if not text or not validate_explanation(text, decision, investigation):
+                    return fallback
+                return text
 
             tool_name = str(tool_request.get("tool") or tool_request.get("name") or "").strip()
             arguments = tool_request.get("arguments") or tool_request.get("args") or {}
             if not isinstance(arguments, dict):
                 arguments = {}
             if not tool_name:
-                return text or fallback
+                if not text or not validate_explanation(text, decision, investigation):
+                    return fallback
+                return text
 
             messages.append(LLMMessage(role="assistant", content=text))
             try:
@@ -531,6 +578,8 @@ listed here.
         tool_declarations: list[dict[str, Any]] | None = None,
     ) -> ResolutionOutcome:
         investigation = self.investigate(db, case_id)
+        if hasattr(investigation.case, "workflow_state"):
+            investigation.case.workflow_state = "investigation"
         decision = self.decide(
             db, investigation, now=now, actor_role=actor_role, actor_id=actor_id
         )

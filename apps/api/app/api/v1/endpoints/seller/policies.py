@@ -94,11 +94,23 @@ def _history_item(row: SellerPolicy) -> PolicyHistoryItem:
         refunds = row.parsed_rules.get("refunds") or {}
         returns = row.parsed_rules.get("returns") or {}
         if isinstance(refunds, dict):
-            refund_ceiling = refunds.get(
+            raw_ceiling = refunds.get(
                 "auto_approve_up_to", refunds.get("auto_approve_max_amount")
             )
+            if isinstance(raw_ceiling, int) and not isinstance(raw_ceiling, bool):
+                refund_ceiling = raw_ceiling
         if isinstance(returns, dict):
-            returns_window = returns.get("window_days")
+            raw_window = returns.get("window_days")
+            if isinstance(raw_window, int) and not isinstance(raw_window, bool):
+                returns_window = raw_window
+
+    refund_ceiling_minor: int | None = None
+    if refund_ceiling is not None:
+        try:
+            refund_ceiling_minor = to_minor_units(refund_ceiling)
+        except (TypeError, ValueError):
+            refund_ceiling_minor = None
+            refund_ceiling = None
 
     return PolicyHistoryItem(
         id=row.id,
@@ -111,9 +123,7 @@ def _history_item(row: SellerPolicy) -> PolicyHistoryItem:
         content_sha256=row.content_sha256,
         returns_window=returns_window,
         refund_ceiling=refund_ceiling,
-        refund_ceiling_minor=(
-            to_minor_units(refund_ceiling) if refund_ceiling is not None else None
-        ),
+        refund_ceiling_minor=refund_ceiling_minor,
     )
 
 

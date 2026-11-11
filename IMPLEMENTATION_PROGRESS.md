@@ -19,8 +19,6 @@
 
 ## Known Limitations
 
-- Structured intake and investigation planning are not yet implemented.
-- Workflow state machine is not yet formalized beyond existing case statuses.
-- Prompt-injection and evidence-integrity test coverage can be expanded.
-- Gemini streaming currently derives from the completed response rather than token-level streaming.
+- Investigation planner persistence of tool traces is handled through existing case message tool_calls.
+- Prompt-injection and evidence-integrity automated test coverage can still be expanded.
 - Real Gemini API verification depends on the configured `.env` credentials.

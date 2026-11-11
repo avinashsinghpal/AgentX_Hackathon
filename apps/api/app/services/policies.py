@@ -199,7 +199,7 @@ class PolicyConfigurationService:
         return warnings
 
     def validate_config(self, policy: PolicySchema) -> PolicySchema:
-        """Structured input is already schema-validated; normalize money semantics."""
+        """Structured input is already schema-validated; enforce publication invariants."""
         return policy
 
     def validate_yaml(

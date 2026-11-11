@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.action import Action
 from app.models.case import Case, CaseMessage
 from app.models.order import Order
 from app.models.shipment import Shipment
@@ -257,7 +258,14 @@ class ResolutionOrchestrator:
             limit = int(arguments.get("limit") or 20)
             limit = max(1, min(limit, 100))
             if case.buyer_id is None:
-                return {"case_count": 0, "recent_cases": []}
+                return {
+                    "case_count": 0,
+                    "status_counts": {},
+                    "decision_counts": {},
+                    "refund_action_count": 0,
+                    "refunded_amount_minor": 0,
+                    "recent_cases": [],
+                }
             cases = (
                 db.query(Case)
                 .filter(Case.buyer_id == case.buyer_id)
@@ -265,8 +273,36 @@ class ResolutionOrchestrator:
                 .limit(limit)
                 .all()
             )
+            status_counts: dict[str, int] = {}
+            decision_counts: dict[str, int] = {}
+            for item in cases:
+                status_counts[item.status] = status_counts.get(item.status, 0) + 1
+                if item.decision:
+                    decision_counts[item.decision] = decision_counts.get(item.decision, 0) + 1
+
+            case_ids = [item.id for item in cases]
+            if case_ids:
+                refund_actions = (
+                    db.query(Action)
+                    .filter(
+                        Action.case_id.in_(case_ids),
+                        Action.status == "succeeded",
+                        Action.action_type.in_(("refund", "wallet_credit")),
+                    )
+                    .all()
+                )
+            else:
+                refund_actions = []
+            refunded_amount_minor = sum(
+                int(action.amount_minor or 0) for action in refund_actions
+            )
+
             return {
                 "case_count": len(cases),
+                "status_counts": status_counts,
+                "decision_counts": decision_counts,
+                "refund_action_count": len(refund_actions),
+                "refunded_amount_minor": refunded_amount_minor,
                 "recent_cases": [
                     {
                         "case_number": item.case_number,

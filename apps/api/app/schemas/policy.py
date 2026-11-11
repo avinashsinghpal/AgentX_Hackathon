@@ -113,18 +113,36 @@ class RefundsPolicy(BaseModel):
             if auto is None:
                 auto = alias
 
-        if auto is not None and data.get("require_seller_approval_above") is None:
-            return {**data, "require_seller_approval_above": auto}
-        return data
+        approval = data.get("require_seller_approval_above")
+        if auto is None and approval is None:
+            return data
+        if auto is None:
+            auto = approval
+        if approval is None:
+            approval = auto
+        if auto != approval:
+            raise ValueError(
+                "refunds.require_seller_approval_above must equal "
+                "refunds.auto_approve_up_to"
+            )
+        cleaned = {
+            key: value
+            for key, value in data.items()
+            if key != "auto_approve_max_amount"
+        }
+        return {
+            **cleaned,
+            "auto_approve_up_to": auto,
+            "require_seller_approval_above": auto,
+        }
 
     @field_validator("require_seller_approval_above")
     @classmethod
     def validate_ceiling(cls, v: int, info: ValidationInfo) -> int:
         auto_up_to = info.data.get("auto_approve_up_to", 500) if info.data else 500
-        if v < auto_up_to:
+        if v != auto_up_to:
             raise ValueError(
-                "require_seller_approval_above must be greater than or equal to "
-                "auto_approve_up_to"
+                "require_seller_approval_above must equal auto_approve_up_to"
             )
         return v
 

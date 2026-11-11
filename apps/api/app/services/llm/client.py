@@ -274,7 +274,13 @@ class GeminiLLMClient(LLMClient):
         max_calls: int,
         temperature: float = 0.1,
     ) -> str:
-        """Run a native Gemini function-calling loop and return final text."""
+        """Run a native Gemini function-calling loop and return final text.
+
+        The loop supports sequential and batched function calls, feeds every
+        structured result back to the model, and is bounded by ``max_calls``.
+        Unknown tools or executor failures become tool results instead of being
+        silently ignored; the model must then produce a final answer.
+        """
         system_instruction = ZERO_EMOJI_SYSTEM_PROMPT
         contents: list[dict[str, Any]] = []
         for message in messages:
@@ -284,19 +290,30 @@ class GeminiLLMClient(LLMClient):
                 role = "user" if message.role == "user" else "model"
                 contents.append({"role": role, "parts": [{"text": message.content}]})
 
+        allowed_tools = {
+            str(tool.get("name")): tool for tool in tool_declarations if tool.get("name")
+        }
         declarations = []
         for tool in tool_declarations:
+            name = tool.get("name")
+            if not name:
+                continue
             declarations.append(
                 {
-                    "name": tool["name"],
+                    "name": name,
                     "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                    "parameters": tool.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    ),
                 }
             )
 
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
         used_calls = 0
-        while used_calls < max(max_calls, 1):
+        max_iterations = max(max_calls, 1) + 1
+        iteration = 0
+        while iteration < max_iterations and used_calls < max(max_calls, 1):
+            iteration += 1
             payload: dict[str, Any] = {
                 "system_instruction": {"parts": [{"text": system_instruction}]},
                 "contents": contents,
@@ -321,37 +338,53 @@ class GeminiLLMClient(LLMClient):
             candidate = (data.get("candidates") or [{}])[0]
             content = candidate.get("content") or {}
             parts = content.get("parts") or []
-            function_calls = [part.get("functionCall") for part in parts if part.get("functionCall")]
+            function_calls = [
+                (index, part.get("functionCall"))
+                for index, part in enumerate(parts)
+                if isinstance(part, dict) and part.get("functionCall")
+            ]
+
             if not function_calls:
-                text_parts = [part.get("text", "") for part in parts if part.get("text")]
+                text_parts = [
+                    part.get("text", "")
+                    for part in parts
+                    if isinstance(part, dict) and part.get("text")
+                ]
                 return sanitize_no_emoji("".join(text_parts).strip())
 
-            # Preserve the original model part, including thought signatures.
-            model_part = next(part for part in parts if part.get("functionCall"))
-            function_call = model_part["functionCall"]
-            tool_name = str(function_call.get("name") or "")
-            arguments = function_call.get("args") or {}
-            if not isinstance(arguments, dict):
-                arguments = {}
-            contents.append({"role": "model", "parts": [model_part]})
-            try:
-                observation = await tool_executor(tool_name, arguments)
-            except Exception as exc:
-                observation = {"error": str(exc)}
-            contents.append(
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "functionResponse": {
-                                "name": tool_name,
-                                "response": {"result": observation},
-                            }
+            # Preserve the full model turn, including thought signatures and text.
+            contents.append({"role": "model", "parts": parts})
+
+            response_parts: list[dict[str, Any]] = []
+            for _, function_call in function_calls:
+                if used_calls >= max(max_calls, 1):
+                    break
+                function_call = function_call or {}
+                tool_name = str(function_call.get("name") or "")
+                arguments = function_call.get("args") or {}
+                if not isinstance(arguments, dict):
+                    arguments = {}
+
+                if tool_name not in allowed_tools:
+                    observation: Any = {"error": f"Unknown or unauthorized tool: {tool_name}"}
+                else:
+                    try:
+                        observation = await tool_executor(tool_name, arguments)
+                    except Exception as exc:
+                        observation = {"error": str(exc)}
+
+                response_parts.append(
+                    {
+                        "functionResponse": {
+                            "name": tool_name,
+                            "response": {"result": observation},
                         }
-                    ],
-                }
-            )
-            used_calls += 1
+                    }
+                )
+                used_calls += 1
+
+            if response_parts:
+                contents.append({"role": "user", "parts": response_parts})
 
         return ""
 

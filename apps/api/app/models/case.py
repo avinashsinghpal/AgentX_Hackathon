@@ -68,6 +68,12 @@ class Case(Base):
         nullable=False,
         index=True,
     )  # "open" | "investigating" | "pending_approval" | "resolved" | "rejected"
+    workflow_state: Mapped[str] = mapped_column(
+        String(32),
+        default="intake",
+        nullable=False,
+        index=True,
+    )  # explicit orchestration state; see app.services.agent.workflow
     issue_category: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
