@@ -10,6 +10,7 @@ FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web ./
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV API_PROXY_URL=http://api:8000/api/:path*
 RUN pnpm run build
 
 FROM base AS runner
@@ -21,4 +22,3 @@ COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
 CMD ["node", "server.js"]
-

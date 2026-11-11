@@ -7,6 +7,8 @@ duplicated per transport.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,6 +84,27 @@ def _utc(dt: datetime | None) -> datetime | None:
 
 def _money(amount_minor: int | None) -> str:
     return f"{(amount_minor or 0) / 100:.2f}"
+
+
+def _parse_tool_request(text: str) -> dict[str, Any] | None:
+    """Parse a strict JSON tool request from an LLM response."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    candidates = [stripped]
+    match = re.search(r"\{.*\}", stripped, re.DOTALL)
+    if match and match.group(0) != stripped:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if "tool" in parsed or "name" in parsed:
+            return parsed
+    return None
 
 
 class ResolutionService:
@@ -172,6 +195,7 @@ class ResolutionService:
         risk_evaluation = self.risk_evaluations.evaluate_case(
             db, case, now=evaluated_at
         )
+        high_risk = any(flag.severity == "high" for flag in risk_evaluation.flags)
 
         evaluation: CaseEvaluation = self.evaluations.evaluate_case(
             db, case, now=evaluated_at, persist=True
@@ -234,7 +258,7 @@ class ResolutionService:
                 }
             )
 
-        elif result.decision in {Decision.NEEDS_APPROVAL, Decision.MANUAL_REVIEW}:
+        elif result.decision in {Decision.NEEDS_APPROVAL, Decision.MANUAL_REVIEW} or high_risk:
             approval = self.approvals.request_for_evaluation(
                 db,
                 case=case,
@@ -242,6 +266,14 @@ class ResolutionService:
                 evaluation_id=record_id,
                 now=evaluated_at,
             )
+            case.outcome_details = {
+                **(case.outcome_details or {}),
+                "risk_flags": [flag.code for flag in risk_evaluation.flags],
+                "risk_data_sufficiency": risk_evaluation.data_sufficiency.value,
+                "escalated_due_to_risk": high_risk
+                and result.decision is Decision.ELIGIBLE,
+            }
+            db.commit()
             badge = "needs_approval"
             steps.append(
                 {
@@ -309,6 +341,7 @@ class ResolutionService:
         self,
         investigation: Investigation,
         decision: DecisionOutcome,
+        conversation_history: list[CaseMessage] | None = None,
     ) -> list[LLMMessage]:
         case = investigation.case
         order = investigation.order
@@ -316,6 +349,25 @@ class ResolutionService:
         checks = "; ".join(
             f"{check.check}={check.passed}" + (f" ({check.reason_code})" if check.reason_code else "")
             for check in result.checks
+        )
+        risk_flags = (
+            ", ".join(
+                f"{flag.code} ({flag.severity}): {flag.explanation}"
+                for flag in (decision.risk_evaluation.flags if decision.risk_evaluation else [])
+            )
+            or "none"
+        )
+        risk_sufficiency = (
+            decision.risk_evaluation.data_sufficiency.value
+            if decision.risk_evaluation is not None
+            else "unknown"
+        )
+        history_lines = []
+        if conversation_history:
+            for message in conversation_history[-10:]:
+                history_lines.append(f"{message.sender_role}: {message.message}")
+        history_text = (
+            "\nConversation history:\n" + "\n".join(history_lines) if history_lines else ""
         )
 
         facts = f"""
@@ -333,8 +385,10 @@ Verified facts (authoritative, produced by the deterministic backend):
 - Proposed action: {result.proposed_action}
 - Backend outcome badge: {decision.badge}
 - Checks: {checks}
+- Risk flags: {risk_flags}
+- Risk data sufficiency: {risk_sufficiency}
 
-Customer statement: "{case.customer_narrative}"
+Customer statement: "{case.customer_narrative}"{history_text}
 
 Write a clear, factual, reassuring response. Explain the exact outcome and next steps.
 Never include emojis. Quote the exact amounts and only the facts above. Do not invent
@@ -386,16 +440,63 @@ listed here.
         self,
         investigation: Investigation,
         decision: DecisionOutcome,
+        *,
+        conversation_history: list[CaseMessage] | None = None,
+        tool_executor: Any = None,
+        max_tool_calls: int = 0,
     ) -> str:
-        messages = self.build_messages(investigation, decision)
+        messages = self.build_messages(
+            investigation, decision, conversation_history=conversation_history
+        )
+        fallback = self.fallback_explanation(investigation, decision)
+
+        if tool_executor is None or max_tool_calls <= 0:
+            try:
+                response = await self.llm.generate_response(messages)
+                text = (response.text or "").strip()
+                return text or fallback
+            except Exception:
+                # A generation failure must never roll back or alter the verified
+                # policy decision or an already-completed action.
+                return fallback
+
+        used_calls = 0
+        while used_calls < max_tool_calls:
+            try:
+                response = await self.llm.generate_response(messages)
+            except Exception:
+                return fallback
+            text = (response.text or "").strip()
+            tool_request = _parse_tool_request(text)
+            if tool_request is None:
+                return text or fallback
+
+            tool_name = str(tool_request.get("tool") or tool_request.get("name") or "").strip()
+            arguments = tool_request.get("arguments") or tool_request.get("args") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            if not tool_name:
+                return text or fallback
+
+            messages.append(LLMMessage(role="assistant", content=text))
+            try:
+                observation = await tool_executor(tool_name, arguments)
+            except Exception as exc:
+                observation = {"error": str(exc)}
+            messages.append(
+                LLMMessage(
+                    role="user",
+                    content=f"Tool result for {tool_name}: {json.dumps(observation, default=str)}",
+                )
+            )
+            used_calls += 1
+
         try:
             response = await self.llm.generate_response(messages)
             text = (response.text or "").strip()
-            return text or self.fallback_explanation(investigation, decision)
+            return text or fallback
         except Exception:
-            # A generation failure must never roll back or alter the verified
-            # policy decision or an already-completed action.
-            return self.fallback_explanation(investigation, decision)
+            return fallback
 
     # -------------------------------------------------------------------- resolve
     async def resolve_case(
@@ -407,12 +508,21 @@ listed here.
         actor_role: str = "agent",
         actor_id: str | None = None,
         persist_message: bool = True,
+        conversation_history: list[CaseMessage] | None = None,
+        tool_executor: Any = None,
+        max_tool_calls: int = 0,
     ) -> ResolutionOutcome:
         investigation = self.investigate(db, case_id)
         decision = self.decide(
             db, investigation, now=now, actor_role=actor_role, actor_id=actor_id
         )
-        explanation = await self.explain(investigation, decision)
+        explanation = await self.explain(
+            investigation,
+            decision,
+            conversation_history=conversation_history,
+            tool_executor=tool_executor,
+            max_tool_calls=max_tool_calls,
+        )
 
         message: CaseMessage | None = None
         if persist_message:
@@ -449,6 +559,9 @@ listed here.
         now: datetime | None = None,
         actor_role: str = "agent",
         actor_id: str | None = None,
+        conversation_history: list[CaseMessage] | None = None,
+        tool_executor: Any = None,
+        max_tool_calls: int = 0,
     ) -> AsyncGenerator[dict[str, Any], None]:
         investigation = self.investigate(db, case_id)
         for step in investigation.steps:
@@ -463,7 +576,9 @@ listed here.
         if len(decision.steps) > 1:
             yield {"event": "investigation_step", "data": decision.steps[1]}
 
-        messages = self.build_messages(investigation, decision)
+        messages = self.build_messages(
+            investigation, decision, conversation_history=conversation_history
+        )
         full_text = ""
         try:
             async for token in self.llm.stream_response(messages):
