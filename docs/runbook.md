@@ -126,9 +126,9 @@ rebuilds `audit_chain_state`, and verifies row counts. It never creates the sche
 Create the schema once, then point the tests at it:
 ```bash
 cd apps/api
-.venv/Scripts/python -c "from sqlalchemy import create_engine, text; e=create_engine('postgresql+psycopg://sellerresolve:sellerresolve_local_password@localhost:5432/sellerresolve', isolation_level='AUTOCOMMIT'); c=e.connect(); c.execute(text('CREATE SCHEMA IF NOT EXISTS sellerresolve_test')); c.commit()"
+.venv/Scripts/python -c "from sqlalchemy import create_engine, text; e=create_engine('postgresql+psycopg://sellerresolve:<POSTGRES_PASSWORD>@localhost:5432/sellerresolve', isolation_level='AUTOCOMMIT'); c=e.connect(); c.execute(text('CREATE SCHEMA IF NOT EXISTS sellerresolve_test')); c.commit()"
 
-export TEST_DATABASE_URL="postgresql+psycopg://sellerresolve:sellerresolve_local_password@localhost:5432/sellerresolve?options=-csearch_path%3Dsellerresolve_test"
+export TEST_DATABASE_URL="postgresql+psycopg://sellerresolve:<POSTGRES_PASSWORD>@localhost:5432/sellerresolve?options=-csearch_path%3Dsellerresolve_test"
 .venv/Scripts/python -m pytest tests -q
 ```
 The suite drops and recreates every table in that schema. Never point

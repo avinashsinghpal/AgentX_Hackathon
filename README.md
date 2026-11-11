@@ -142,7 +142,7 @@ cd apps/api
 .venv\Scripts\python -m pytest tests -q
 
 # Same suite against PostgreSQL (uses a scratch schema and drops it):
-TEST_DATABASE_URL="postgresql+psycopg://sellerresolve:sellerresolve_local_password@localhost:5432/sellerresolve?options=-csearch_path%3Dsellerresolve_test" \
+TEST_DATABASE_URL="postgresql+psycopg://sellerresolve:<POSTGRES_PASSWORD>@localhost:5432/sellerresolve?options=-csearch_path%3Dsellerresolve_test" \
   .venv\Scripts\python -m pytest tests -q
 ```
 
