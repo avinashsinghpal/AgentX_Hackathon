@@ -8,6 +8,7 @@ from app.api.deps import CurrentSeller, DbSession
 from app.models.order import Order
 from app.models.shipment import Shipment
 from app.services.audit import AuditLogService
+from app.services.orders import order_items_payload, sync_order_items, sync_tracking_events
 
 router = APIRouter(prefix="/orders", tags=["Seller Orders"])
 
@@ -39,18 +40,32 @@ def list_orders(
     results = []
     for ord_obj in orders:
         shipment = ord_obj.shipments[0] if ord_obj.shipments else None
+        items = order_items_payload(ord_obj)
+        address = ord_obj.shipping_address or {}
+        buyer_name = address.get("name")
+        if not buyer_name and ord_obj.buyer is not None:
+            buyer_name = ord_obj.buyer.user.full_name
+        created_at = ord_obj.order_date.isoformat()
         results.append(
             {
                 "id": ord_obj.id,
                 "order_number": ord_obj.order_number,
-                "order_date": ord_obj.order_date.isoformat(),
+                "order_date": created_at,
+                # Legacy seller-console fields.  Keep them alongside the
+                # normalized names so existing pages do not need a contract
+                # migration, while money is explicit about its unit.
+                "created_at": created_at,
+                "buyer_name": buyer_name or "Guest customer",
+                "items_count": len(items),
+                "status": ord_obj.order_status,
+                "total_amount": ord_obj.total_amount / 100.0,
+                "total_amount_minor": ord_obj.total_amount,
                 "currency": ord_obj.currency,
-                "total_amount": ord_obj.total_amount,
                 "payment_method": ord_obj.payment_method,
                 "payment_status": ord_obj.payment_status,
                 "order_status": ord_obj.order_status,
                 "shipping_address": ord_obj.shipping_address,
-                "items": ord_obj.items,
+                "items": items,
                 "shipment": {
                     "tracking_number": shipment.tracking_number,
                     "courier_partner": shipment.courier_partner,
@@ -211,6 +226,7 @@ def seed_demo_orders(
         )
         db.add(ord_obj)
         db.flush()
+        sync_order_items(db, ord_obj, sc.items)
 
         tracking_events: list[dict[str, Any]] = [
             {
@@ -259,6 +275,8 @@ def seed_demo_orders(
             tracking_events=tracking_events,
         )
         db.add(shipment)
+        db.flush()
+        sync_tracking_events(db, shipment, tracking_events)
         created_orders.append(sc.order_number)
 
     db.commit()

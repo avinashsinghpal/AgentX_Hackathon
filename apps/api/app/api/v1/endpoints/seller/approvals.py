@@ -1,12 +1,17 @@
-from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentSeller, DbSession
-from app.models.case import ApprovalRequest, Case, CaseMessage
-from app.services.audit import AuditLogService
+from app.models.case import ApprovalRequest
+from app.services.approvals import (
+    ApprovalNotFoundError,
+    ApprovalService,
+    ApprovalStateError,
+    resolve_requested_amount_minor,
+)
+from app.services.orders import order_items_payload
 
 router = APIRouter(prefix="/approvals", tags=["Seller Approvals"])
 
@@ -33,26 +38,34 @@ def list_approvals(
 
     results = []
     for app_req in approvals:
-        c: Case = app_req.case
+        c = app_req.case
+        order = c.order if c else None
+        buyer_name = c.buyer.user.full_name if c and c.buyer and c.buyer.user else "Customer"
         results.append(
             {
                 "id": app_req.id,
                 "case_id": app_req.case_id,
                 "case_number": c.case_number if c else "",
+                "buyer_name": buyer_name,
                 "reason": app_req.reason,
                 "auto_evaluation_summary": app_req.auto_evaluation_summary,
                 "requested_action": app_req.requested_action,
+                "requested_amount_minor": resolve_requested_amount_minor(app_req, order),
+                "currency": app_req.currency or (order.currency if order else "INR"),
+                "policy_evaluation_id": app_req.policy_evaluation_id,
+                "action_id": app_req.action_id,
                 "status": app_req.status,
                 "seller_notes": app_req.seller_notes,
                 "created_at": app_req.created_at.isoformat(),
+                "expires_at": app_req.expires_at.isoformat() if app_req.expires_at else None,
                 "decided_at": app_req.decided_at.isoformat() if app_req.decided_at else None,
                 "order": {
-                    "order_number": c.order.order_number if c and c.order else "",
-                    "total_amount": c.order.total_amount if c and c.order else 0,
-                    "currency": c.order.currency if c and c.order else "INR",
-                    "items": c.order.items if c and c.order else [],
+                    "order_number": order.order_number if order else "",
+                    "total_amount": order.total_amount if order else 0,
+                    "currency": order.currency if order else "INR",
+                    "items": order_items_payload(order) if order else [],
                 }
-                if c and c.order
+                if order
                 else None,
                 "customer_narrative": c.customer_narrative if c else "",
                 "evidence_urls": c.evidence_urls if c else [],
@@ -68,90 +81,36 @@ def decide_approval(
     seller: CurrentSeller,
     db: DbSession,
 ) -> dict[str, Any]:
-    approval: ApprovalRequest | None = (
-        db.query(ApprovalRequest)
-        .filter(
-            ApprovalRequest.id == approval_id,
-            ApprovalRequest.seller_id == seller.id,
+    service = ApprovalService()
+    try:
+        outcome = service.decide(
+            db,
+            approval_id=approval_id,
+            seller=seller,
+            decision=data.decision,
+            seller_notes=data.seller_notes,
         )
-        .first()
-    )
-
-    if not approval:
+    except ApprovalNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Approval request not found.",
-        )
-
-    if approval.status != "pending":
+            detail=str(exc),
+        ) from exc
+    except ApprovalStateError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This request has already been decided ({approval.status}).",
-        )
+            detail=str(exc),
+        ) from exc
 
-    now = datetime.now(UTC)
-    approval.status = data.decision
-    approval.seller_notes = data.seller_notes
-    approval.decided_at = now
-
-    case: Case | None = approval.case
-    if case:
-        if data.decision == "approved":
-            case.status = "resolved"
-            case.decision = "executed"
-            case.resolved_at = now
-            case.approved_by = seller.user_id
-
-            # Add message to case
-            decision_msg = f"Merchant Approved Exception: {approval.reason}"
-            if data.seller_notes:
-                decision_msg += f"\nMerchant Note: {data.seller_notes}"
-
-            msg = CaseMessage(
-                case_id=case.id,
-                sender_role="seller",
-                message=decision_msg,
-                decision_badge="executed",
-            )
-            db.add(msg)
-        else:
-            case.status = "rejected"
-            case.decision = "not_eligible"
-            case.resolved_at = now
-
-            reject_msg = f"Merchant Rejected Exception: {approval.reason}"
-            if data.seller_notes:
-                reject_msg += f"\nReason: {data.seller_notes}"
-
-            msg = CaseMessage(
-                case_id=case.id,
-                sender_role="seller",
-                message=reject_msg,
-                decision_badge="not_eligible",
-            )
-            db.add(msg)
-
-    db.commit()
-    db.refresh(approval)
-
-    AuditLogService.log_action(
-        db=db,
-        action=f"approval.{data.decision}",
-        actor_role="seller",
-        actor_id=seller.user_id,
-        seller_id=seller.id,
-        case_id=approval.case_id,
-        payload={
-            "approval_id": approval.id,
-            "decision": data.decision,
-            "seller_notes": data.seller_notes,
-            "requested_action": approval.requested_action,
-        },
-    )
-
+    approval = outcome.approval
     return {
         "success": True,
         "approval_id": approval.id,
         "status": approval.status,
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
+        # Approval is authorization; execution is reported separately.
+        "executed": outcome.executed,
+        "action_id": outcome.action.action.id if outcome.action else approval.action_id,
+        "failure_reason": outcome.failure_reason,
+        "case_status": outcome.case.status,
+        "case_decision": outcome.case.decision,
     }

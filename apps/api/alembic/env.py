@@ -2,6 +2,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+import sqlalchemy as sa
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
@@ -21,11 +22,31 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def compare_types(
+    context: object,
+    inspected_column: sa.Column[object],
+    metadata_column: sa.Column[object],
+    inspected_type: sa.types.TypeEngine[object],
+    metadata_type: sa.types.TypeEngine[object],
+) -> bool | None:
+    """Treat JSON and PostgreSQL JSONB as the same logical column type.
+
+    ``app.db.types.JSONType`` selects JSONB on PostgreSQL, while historical
+    columns (and reflected JSON) stay in PostgreSQL ``json``.  Both map to the
+    same Python ``dict``/``list`` contract, so a type-only difference must not
+    produce a spurious migration.
+    """
+    if isinstance(inspected_type, sa.JSON) and isinstance(metadata_type, sa.JSON):
+        return False
+    return None
+
+
 def run_migrations_offline() -> None:
     url = settings.DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        compare_type=True,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -45,7 +66,14 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=compare_types,
+            compare_server_default=True,
+            # SQLite cannot ALTER most constraints; batch mode recreates tables.
+            render_as_batch=connection.dialect.name == "sqlite",
+        )
 
         with context.begin_transaction():
             context.run_migrations()

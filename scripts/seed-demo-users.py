@@ -6,6 +6,7 @@ Credentials:
 - Buyer: buyer@example.com / Password123!
 """
 
+import hashlib
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -20,11 +21,11 @@ from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import engine, get_db
 from app.models.buyer import Buyer
-from app.models.case import Case, CaseMessage
 from app.models.order import Order
 from app.models.seller import Seller, SellerCustomerLink, SellerOperations, SellerPolicy
 from app.models.shipment import Shipment
 from app.models.user import User
+from app.schemas.policy import PolicySchema, policy_to_yaml
 
 
 def seed_demo_accounts() -> None:
@@ -58,7 +59,8 @@ def seed_demo_accounts() -> None:
                 user_id=seller_user.id,
                 store_name="Apex Electronics",
                 store_url="https://apex-electronics.com",
-                currency="INR",
+                # The seeded catalogue and canonical scenarios are priced in USD.
+                currency="USD",
                 status="active",
                 onboarding_step=4,
             )
@@ -87,36 +89,37 @@ def seed_demo_accounts() -> None:
         # Seller Policy
         policy = db.query(SellerPolicy).filter(SellerPolicy.seller_id == seller.id, SellerPolicy.is_active.is_(True)).first()
         if not policy:
-            policy_yaml = """returns:
-  window_days: 14
-  conditions:
-    - unopened
-    - original_packaging
-refunds:
-  auto_approve_max_amount: 50.00
-  instant_refund_without_return_threshold: 25.00
-damage_claims:
-  photo_evidence_required: true
-cancellations:
-  allowed_before_fulfillment: true
-delays:
-  delay_threshold_days: 3
-  compensation_per_day_late: 10.00
-  max_delay_compensation: 50.00
-"""
-            parsed_rules = {
-                "returns": {"window_days": 14, "conditions": ["unopened", "original_packaging"]},
-                "refunds": {"auto_approve_max_amount": 50.00, "instant_refund_without_return_threshold": 25.00},
-                "damage_claims": {"photo_evidence_required": True},
-                "cancellations": {"allowed_before_fulfillment": True},
-                "delays": {"delay_threshold_days": 3, "compensation_per_day_late": 10.00, "max_delay_compensation": 50.00},
-            }
+            # Use the same canonical schema and YAML renderer as the policy
+            # configuration service so a fresh seed is immediately valid.
+            policy_schema = PolicySchema.model_validate(
+                {
+                    "currency": seller.currency or "INR",
+                    "returns": {"window_days": 14},
+                    "refunds": {
+                        "auto_approve_up_to": 50,
+                        "require_seller_approval_above": 50,
+                        "instant_refund_without_return_threshold": 25,
+                    },
+                    "delays": {
+                        "notify_after_days_late": 3,
+                        "compensation_per_day_late": 10,
+                        "max_delay_compensation": 50,
+                    },
+                    "damage_claims": {"require_photo": True},
+                }
+            )
+            policy_yaml = policy_to_yaml(policy_schema)
             policy = SellerPolicy(
                 seller_id=seller.id,
                 version=1,
                 is_active=True,
                 policy_yaml=policy_yaml,
-                parsed_rules=parsed_rules,
+                parsed_rules=policy_schema.model_dump(mode="json"),
+                currency=policy_schema.currency,
+                content_sha256=hashlib.sha256(policy_yaml.encode("utf-8")).hexdigest(),
+                source="seed",
+                published_by_user_id=seller_user.id,
+                activated_at=now,
             )
             db.add(policy)
             db.flush()

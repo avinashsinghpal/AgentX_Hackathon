@@ -9,6 +9,7 @@ Executes all 4 canonical scenarios from the AgentX Hackathon PS-04 specification
 5. Mathematical Tamper Detection & Cryptographic Hash-Chain Verification across all audit events.
 """
 
+# ruff: noqa: E402 - app imports must happen after sys.path/environment setup.
 import asyncio
 import os
 import re
@@ -19,20 +20,38 @@ from pathlib import Path
 # Add apps/api to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "api"))
 
-os.environ["ENV"] = "test"
+os.environ["ENV"] = "testing"
 os.environ["SECRET_KEY"] = "e2e-test-secret-key-32-bytes-minimum-ok"
+# By default the scenario suite is self-contained on SQLite.  Set
+# E2E_DATABASE_URL to run the exact same scenarios against an explicit database
+# (for example the Docker PostgreSQL instance) without touching the app's
+# configured DATABASE_URL.
+E2E_DATABASE_URL = os.environ.get("E2E_DATABASE_URL")
+if E2E_DATABASE_URL:
+    os.environ["DATABASE_URL"] = E2E_DATABASE_URL
+else:
+    # Keep the artifact next to the API package and use an absolute URL so the
+    # run is independent of the caller's working directory (a relative URL
+    # previously left a stale database behind that was missing new columns).
+    E2E_DB_PATH = Path(__file__).resolve().parent.parent / "apps" / "api" / "e2e-scenarios.db"
+    E2E_DB_PATH.unlink(missing_ok=True)
+    os.environ["DATABASE_URL"] = f"sqlite:///{E2E_DB_PATH.as_posix()}"
 
 from app.db.base import Base
 from app.db.session import engine, get_db
+from app.models.action import Action
 from app.models.buyer import Buyer
 from app.models.case import ApprovalRequest, Case, CaseMessage
 from app.models.order import Order
 from app.models.seller import Seller, SellerPolicy
 from app.models.shipment import Shipment
 from app.models.user import User
+from app.schemas.policy import parse_and_validate_yaml, policy_rules_dict
 from app.services.agent.orchestrator import ResolutionOrchestrator
+from app.services.approvals import ApprovalService
 from app.services.audit import AuditLogService
 from app.services.monitor import run_delay_monitor_cycle
+from app.services.orders import sync_order_items, sync_tracking_events
 
 EMOJI_REGEX = re.compile(
     "[\U00010000-\U0010ffff"
@@ -62,7 +81,8 @@ async def run_e2e_suite() -> None:
     print("  Autonomous, Policy-Aware Resolution Engine Verification")
     print("=" * 70)
 
-    # Initialize fresh tables in SQLite
+    # Initialize tables if the target database/schema is empty.  Existing
+    # migrated PostgreSQL schemas are left untouched.
     Base.metadata.create_all(bind=engine)
     db = next(get_db())
 
@@ -94,44 +114,32 @@ async def run_e2e_suite() -> None:
         db.add(seller)
         db.flush()
 
+        # Canonical policy document (the schema the engine validates).
         policy_yaml = """
+version: 1
+currency: USD
 returns:
   window_days: 14
-  conditions:
-    - unopened
-    - original_packaging
-  require_photo_for_damaged: true
+  return_shipping_paid_by: seller
 refunds:
-  auto_approve_max_amount: 50.00
-  instant_refund_without_return_threshold: 25.00
+  auto_approve_up_to: 50
+  require_seller_approval_above: 50
+  instant_refund_without_return_threshold: 25
+  cod_refund_method: store_credit
 damage_claims:
-  photo_evidence_required: true
-cancellations:
-  allowed_before_fulfillment: true
+  require_photo: true
+  report_within_days: 2
 delays:
-  auto_credit_after_days: 5
-  compensation_amount: 10.00
+  notify_after_days_late: 5
+  compensation_per_day_late: 10
+  max_delay_compensation: 50
+fraud_checks:
+  max_refunds_per_buyer_per_30_days: 3
 """
-        parsed_rules = {
-            "returns": {
-                "window_days": 14,
-                "conditions": ["unopened", "original_packaging"],
-                "require_photo_for_damaged": True,
-            },
-            "refunds": {
-                "auto_approve_max_amount": 50.00,
-                "instant_refund_without_return_threshold": 25.00,
-            },
-            "damage_claims": {
-                "photo_evidence_required": True,
-            },
-            "cancellations": {"allowed_before_fulfillment": True},
-            "delays": {
-                "delay_threshold_days": 3,
-                "compensation_per_day_late": 10.00,
-                "max_delay_compensation": 50.00,
-            },
-        }
+        is_valid, parsed_policy, policy_error = parse_and_validate_yaml(policy_yaml)
+        assert is_valid and parsed_policy is not None, policy_error
+        # Persist the legacy-compatible projection, exactly like the API does.
+        parsed_rules = policy_rules_dict(parsed_policy)
 
         policy = SellerPolicy(
             seller_id=seller.id,
@@ -187,6 +195,7 @@ delays:
         )
         db.add(order_1)
         db.flush()
+        sync_order_items(db, order_1, order_1.items)
 
         shipment_1 = Shipment(
             order_id=order_1.id,
@@ -200,6 +209,24 @@ delays:
         )
         db.add(shipment_1)
         db.flush()
+        sync_tracking_events(
+            db,
+            shipment_1,
+            [
+                {
+                    "status": "in_transit",
+                    "timestamp": (now - timedelta(days=6)).isoformat(),
+                    "location": "Delhi Hub",
+                    "description": "Picked up by courier",
+                },
+                {
+                    "status": "delivered",
+                    "timestamp": (now - timedelta(days=5)).isoformat(),
+                    "location": "Springfield",
+                    "description": "Delivered to recipient",
+                },
+            ],
+        )
 
         case_1 = Case(
             case_number=f"CAS-1001-{run_id}",
@@ -252,6 +279,7 @@ delays:
         )
         db.add(order_2)
         db.flush()
+        sync_order_items(db, order_2, order_2.items)
 
         shipment_2 = Shipment(
             order_id=order_2.id,
@@ -315,6 +343,7 @@ delays:
         )
         db.add(order_3)
         db.flush()
+        sync_order_items(db, order_3, order_3.items)
 
         shipment_3 = Shipment(
             order_id=order_3.id,
@@ -367,15 +396,32 @@ delays:
         assert amount == 320.00
         print(f"  Approval Request #{approval.id} queued for seller: ${amount:.2f}")
 
-        # Human-in-the-loop: Seller approves the replacement/refund
-        approval.status = "approved"
-        approval.seller_notes = "Verified cracked glass photo. Replacement authorized."
-        case_3.status = "resolved"
-        case_3.decision = "approved_by_seller"
-        db.commit()
+        # Human-in-the-loop: the seller authorizes execution. Approval alone is
+        # not proof of execution, so the service must also run and verify it.
+        decision = ApprovalService().decide(
+            db,
+            approval_id=approval.id,
+            seller=seller,
+            decision="approved",
+            seller_notes="Verified cracked glass photo. Replacement authorized.",
+        )
+        db.refresh(case_3)
+        assert decision.executed is True, decision.failure_reason
+        assert decision.action is not None
+        assert decision.action.action.status == "succeeded"
+        db.refresh(decision.action.action)
+        assert decision.action.action.external_reference
+
+        executed_action = (
+            db.query(Action)
+            .filter(Action.case_id == case_3.id, Action.status == "succeeded")
+            .first()
+        )
+        assert executed_action is not None
 
         print(f"  Seller Human-in-the-Loop Action: {approval.status.upper()}")
-        print(f"  Case Updated Status: {case_3.status}")
+        print(f"  Executed Action: {executed_action.action_type} reference {executed_action.external_reference}")
+        print(f"  Case Updated Status: {case_3.status} ({case_3.decision})")
         print("  --> [PASS] Scenario 3 Escalation and Seller Approval verified successfully.")
 
         # ---------------------------------------------------------
@@ -399,6 +445,7 @@ delays:
         )
         db.add(order_4)
         db.flush()
+        sync_order_items(db, order_4, order_4.items)
 
         shipment_4 = Shipment(
             order_id=order_4.id,
@@ -434,8 +481,32 @@ delays:
         )
         assert proactive_msg is not None
         assert_zero_emoji(proactive_msg.message, "Scenario 4 proactive message")
+        credit_action = (
+            db.query(Action)
+            .filter(Action.order_id == order_4.id, Action.action_type == "wallet_credit")
+            .first()
+        )
+        assert credit_action is not None
+        assert credit_action.status == "succeeded"
+        # 6 days late * 10 USD/day, capped at the policy maximum of 50 USD.
+        assert credit_action.amount_minor == 5000
+        assert proactive_results[0]["compensation"] == 50.0
+
+        # A second scan must not duplicate the credit: the succeeded action and the
+        # deterministic idempotency key both prevent it.
+        db.expire_all()
+        repeat_results = run_delay_monitor_cycle(db)
+        assert repeat_results == [], repeat_results
+        credit_count = (
+            db.query(Action)
+            .filter(Action.order_id == order_4.id, Action.action_type == "wallet_credit")
+            .count()
+        )
+        assert credit_count == 1, credit_count
+
         print(f"  Proactive Case #{proactive_case.case_number} created with decision: {proactive_case.decision}")
         print(f"  Customer Notice: \"{proactive_msg.message[:100]}...\"")
+        print(f"  Verified wallet credit: USD {credit_action.amount_minor / 100:.2f} (one action only)")
         print("  --> [PASS] Scenario 4 Proactive Delay Compensation verified successfully.")
 
         # ---------------------------------------------------------

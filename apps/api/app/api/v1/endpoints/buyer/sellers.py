@@ -5,6 +5,7 @@ from app.api.deps import DbSession
 from app.models.order import Order
 from app.models.seller import Seller, SellerPolicy
 from app.schemas.buyer import SellerPublicItem
+from app.schemas.policy import normalize_parsed_rules
 
 router = APIRouter(prefix="/sellers", tags=["Public Sellers Directory"])
 
@@ -42,14 +43,21 @@ def get_sellers_directory(
         categories = ["Apparel", "Footwear", "Electronics", "Accessories"]
 
         if active_policy and active_policy.parsed_rules:
-            rules = active_policy.parsed_rules
-            if "returns" in rules and isinstance(rules["returns"], dict):
-                return_window = rules["returns"].get("window_days", 7)
-                shipping_fee_bearer = rules["returns"].get("return_shipping_paid_by", "seller")
-                if "eligible_categories" in rules["returns"]:
-                    categories = [c.capitalize() for c in rules["returns"]["eligible_categories"]]
-            if "refunds" in rules and isinstance(rules["refunds"], dict):
-                auto_approve_max = float(rules["refunds"].get("auto_approve_max_amount", 2000.0))
+            policy = normalize_parsed_rules(active_policy.parsed_rules)
+            if policy is not None:
+                return_window = policy.returns.window_days
+                shipping_fee_bearer = policy.returns.return_shipping_paid_by
+                if policy.returns.eligible_categories:
+                    categories = [c.capitalize() for c in policy.returns.eligible_categories]
+                auto_approve_max = float(policy.refunds.auto_approve_up_to)
+            else:
+                # Unparseable legacy document: expose nothing but safe defaults.
+                rules = active_policy.parsed_rules
+                if isinstance(rules.get("returns"), dict):
+                    return_window = rules["returns"].get("window_days", 7)
+                    shipping_fee_bearer = rules["returns"].get(
+                        "return_shipping_paid_by", "seller"
+                    )
 
         orders_count = db.query(Order).filter(Order.seller_id == s.id).count()
 

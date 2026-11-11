@@ -44,6 +44,24 @@ switch ($Target) {
         .venv/Scripts/python.exe -m app.db.seed
         Set-Location ../..
     }
+    "db-up" {
+        Write-Host "Starting PostgreSQL via docker compose..." -ForegroundColor Cyan
+        docker compose up -d postgres
+        docker compose ps postgres
+    }
+    "db-migrate" {
+        Write-Host "Applying Alembic migrations..." -ForegroundColor Cyan
+        Set-Location apps/api
+        .venv/Scripts/python.exe -m alembic upgrade head
+        .venv/Scripts/python.exe -m alembic current
+        Set-Location ../..
+    }
+    "db-check" {
+        Write-Host "Checking schema drift against the models..." -ForegroundColor Cyan
+        Set-Location apps/api
+        .venv/Scripts/python.exe -m alembic check
+        Set-Location ../..
+    }
     "e2e" {
         Write-Host "Running Playwright E2E test suite..." -ForegroundColor Cyan
         Set-Location apps/web
@@ -51,7 +69,7 @@ switch ($Target) {
         Set-Location ../..
     }
     Default {
-        Write-Host "Unknown target: $Target. Available targets: dev, lint, test, build, seed, e2e" -ForegroundColor Red
+        Write-Host "Unknown target: $Target. Available targets: dev, lint, test, build, seed, e2e, db-up, db-migrate, db-check" -ForegroundColor Red
         Exit 1
     }
 }

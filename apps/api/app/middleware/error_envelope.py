@@ -1,8 +1,37 @@
+from collections.abc import Sequence
+from typing import Any
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.logging import logger
+
+
+def serializable_validation_errors(
+    errors: Sequence[Any],
+) -> list[dict[str, Any]]:
+    """Reduce Pydantic errors to JSON-safe fields.
+
+    Pydantic puts the original exception object in ``ctx`` for value errors,
+    and the submitted value in ``input``.  Neither is guaranteed to be JSON
+    serializable (or desirable to echo back), so keep the location, message and
+    error type, and stringify the context.
+    """
+    details: list[dict[str, Any]] = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        item: dict[str, Any] = {
+            "type": error.get("type"),
+            "loc": [str(part) for part in error.get("loc", ())],
+            "msg": str(error.get("msg", "Invalid value")),
+        }
+        context = error.get("ctx")
+        if isinstance(context, dict):
+            item["ctx"] = {key: str(value) for key, value in context.items()}
+        details.append(item)
+    return details
 
 
 def setup_error_handlers(app: FastAPI) -> None:
@@ -46,7 +75,7 @@ def setup_error_handlers(app: FastAPI) -> None:
                     "code": "VALIDATION_ERROR",
                     "message": "Invalid request parameters",
                     "request_id": request_id,
-                    "details": exc.errors(),
+                    "details": serializable_validation_errors(exc.errors()),
                 }
             },
         )

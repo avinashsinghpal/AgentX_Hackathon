@@ -24,7 +24,7 @@ Answering a customer query is not the same as resolving it. Standard customer su
 
 ### For Sellers (Merchant Console)
 - **4-Step Guided Onboarding:** Connect store, configure logistics SLA and serviceable PIN codes, define policies, review and activate.
-- **Dual Visual & YAML Policy Editor:** Configure return windows, financial auto-approval ceilings, instant damage refund thresholds, and transit delay compensation with real-time Pydantic AST validation.
+- **Structured Policy Manager with YAML Preview:** Configure return windows, financial auto-approval ceilings, instant damage refund thresholds, and transit delay compensation in a typed form. The backend validates the JSON, renders canonical YAML, optionally accepts YAML edits, and publishes an immutable, checksummed version only after explicit confirmation.
 - **Human-in-the-Loop Approvals Queue:** Review high-value claims with photographic evidence, customer narrative, and 1-click approve/reject actions.
 - **Customer Directory & Store Invites:** Issue cryptographically signed, single-use invite links for buyer onboarding.
 - **Cryptographic Audit Log:** Live tamper-evident audit viewer with sequential SHA-256 hash chaining verification and streaming CSV export.
@@ -96,6 +96,7 @@ flowchart LR
 ### Prerequisites
 - Python 3.12+ (or 3.14+)
 - Node.js 22+ with `pnpm`
+- Docker (for the PostgreSQL database)
 
 ### 1. Installation & Setup
 ```bash
@@ -103,16 +104,28 @@ flowchart LR
 git clone https://github.com/break-the-bug/sellerresolve.git
 cd sellerresolve
 
-# Backend Setup
+# 1a. Start PostgreSQL (default runtime database), from the repository root
+docker compose up -d postgres
+
+# 1b. Backend Setup
 cd apps/api
 python -m venv .venv
 # On Windows:
 .venv\Scripts\pip install -r requirements.txt
+cp .env.example .env    # adjust DATABASE_URL / SECRET_KEY if needed
 .venv\Scripts\alembic upgrade head
 
-# Frontend Setup
+# 1c. Frontend Setup
 cd ../web
 pnpm install
+```
+
+SQLite remains supported for throwaway local runs: set
+`DATABASE_URL=sqlite:///./sellerresolve.db` and run the same Alembic command.
+A one-off helper copies an existing SQLite database into PostgreSQL:
+```bash
+cd apps/api
+python ../../scripts/migrate_sqlite_to_postgres.py --sqlite ./sellerresolve.db
 ```
 
 ### 2. Run Automated End-to-End Test Suite
@@ -123,10 +136,14 @@ cd apps/api
 .venv\Scripts\python ../../scripts/run-e2e-scenarios.py
 ```
 
-### 3. Run Backend Unit & Integration Tests (34 Tests)
+### 3. Run Backend Unit & Integration Tests
 ```bash
 cd apps/api
-.venv\Scripts\python -m pytest tests -v
+.venv\Scripts\python -m pytest tests -q
+
+# Same suite against PostgreSQL (uses a scratch schema and drops it):
+TEST_DATABASE_URL="postgresql+psycopg://sellerresolve:sellerresolve_local_password@localhost:5432/sellerresolve?options=-csearch_path%3Dsellerresolve_test" \
+  .venv\Scripts\python -m pytest tests -q
 ```
 
 ### 4. Run Static Quality & Policy Scanners
@@ -180,8 +197,11 @@ Visit:
 
 ## 7. Deliverable Documentation Links
 
-- [System Architecture Specification](docs/ARCHITECTURE.md)
+- [System Architecture Specification](docs/architecture.md)
 - [REST API Reference](docs/API.md)
+- [Database Schema & Entity Relationships](docs/database-schema.md)
+- [Database Refactor Plan](docs/database-refactor-plan.md)
+- [Database Refactor Final Report](docs/database-refactor-report.md)
 - [Policy Engine Schema](docs/policy-schema.md)
 - [Operations Runbook](docs/runbook.md)
 - [Visual Screenshots Directory](docs/screenshots/)

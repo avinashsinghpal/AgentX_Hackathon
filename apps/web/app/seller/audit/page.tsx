@@ -18,6 +18,34 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 
+interface AuditApiEntry {
+  id: string;
+  sequence: number;
+  timestamp: string;
+  actor_role: string;
+  actor_id: string | null;
+  action: string;
+  case_id: string | null;
+  payload: Record<string, unknown>;
+  current_hash: string;
+  prev_hash: string;
+}
+
+interface AuditListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  records: AuditApiEntry[];
+}
+
+interface AuditVerifyResponse {
+  valid: boolean;
+  record_count: number;
+  error: string | null;
+  latest_hash: string | null;
+  genesis_hash: string | null;
+}
+
 interface AuditEntry {
   id: string;
   sequence: number;
@@ -39,6 +67,31 @@ interface VerificationResult {
   latest_hash: string;
 }
 
+function toAuditEntry(record: AuditApiEntry): AuditEntry {
+  return {
+    id: record.id,
+    sequence: record.sequence,
+    timestamp: record.timestamp,
+    action_type: record.action,
+    actor_type: record.actor_role,
+    actor_id: record.actor_id,
+    case_id: record.case_id,
+    previous_hash: record.prev_hash,
+    entry_hash: record.current_hash,
+    payload: record.payload,
+  };
+}
+
+function toVerification(result: AuditVerifyResponse): VerificationResult {
+  return {
+    is_valid: result.valid,
+    total_entries: result.record_count,
+    broken_sequence: null,
+    genesis_hash: result.genesis_hash ?? "",
+    latest_hash: result.latest_hash ?? "",
+  };
+}
+
 export default function SellerAuditPage() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [verification, setVerification] = useState<VerificationResult | null>(null);
@@ -58,12 +111,12 @@ export default function SellerAuditPage() {
       ]);
 
       if (entriesRes.ok) {
-        const data = await entriesRes.json();
-        setEntries(data);
+        const data: AuditListResponse = await entriesRes.json();
+        setEntries(data.records.map(toAuditEntry));
       }
       if (verifyRes.ok) {
-        const vData = await verifyRes.json();
-        setVerification(vData);
+        const vData: AuditVerifyResponse = await verifyRes.json();
+        setVerification(toVerification(vData));
       }
     } catch {
       toast.error("Failed to load audit logs");
@@ -81,14 +134,14 @@ export default function SellerAuditPage() {
       setVerifying(true);
       const res = await fetch("/api/v1/seller/audit/verify");
       if (res.ok) {
-        const data = await res.json();
-        setVerification(data);
-        if (data.is_valid) {
+        const data: AuditVerifyResponse = await res.json();
+        setVerification(toVerification(data));
+        if (data.valid) {
           toast.success(
-            `Cryptographic audit chain verified. ${data.total_entries} blocks checked with zero tamper flags.`
+            `Cryptographic audit chain verified. ${data.record_count} blocks checked with zero tamper flags.`
           );
         } else {
-          toast.error(`Chain broken at sequence ${data.broken_sequence}`);
+          toast.error(data.error ?? "Audit chain verification failed");
         }
       } else {
         toast.error("Failed to verify chain");

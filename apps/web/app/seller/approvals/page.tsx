@@ -16,6 +16,22 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 
+interface ApprovalApiItem {
+  id: string;
+  case_id: string;
+  case_number: string;
+  buyer_name: string;
+  reason: string;
+  requested_action: { type?: string; amount?: number } | string;
+  requested_amount_minor: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  customer_narrative: string;
+  evidence_urls: string[];
+  order: { order_number: string; currency: string } | null;
+}
+
 interface ApprovalItem {
   id: string;
   case_id: string;
@@ -24,9 +40,29 @@ interface ApprovalItem {
   issue_description: string;
   proposed_action: string;
   proposed_amount: number;
+  proposed_currency: string;
   reason: string;
   requested_at: string;
   status: string;
+}
+
+function toApprovalItem(item: ApprovalApiItem): ApprovalItem {
+  return {
+    id: item.id,
+    case_id: item.case_id,
+    order_number: item.order?.order_number ?? item.case_number,
+    buyer_name: item.buyer_name || "Customer",
+    issue_description: item.customer_narrative || "",
+    proposed_action:
+      typeof item.requested_action === "string"
+        ? item.requested_action
+        : item.requested_action?.type ?? "manual_review",
+    proposed_amount: (item.requested_amount_minor ?? 0) / 100,
+    proposed_currency: item.currency || item.order?.currency || "INR",
+    reason: item.reason,
+    requested_at: item.created_at,
+    status: item.status,
+  };
 }
 
 export default function SellerApprovalsPage() {
@@ -42,8 +78,8 @@ export default function SellerApprovalsPage() {
       setLoading(true);
       const res = await fetch("/api/v1/seller/approvals");
       if (res.ok) {
-        const data = await res.json();
-        setApprovals(data);
+        const data: ApprovalApiItem[] = await res.json();
+        setApprovals(data.map(toApprovalItem));
       } else {
         toast.error("Failed to load approval requests");
       }
@@ -193,7 +229,7 @@ export default function SellerApprovalsPage() {
                       <span className="capitalize">{item.proposed_action.replace(/_/g, " ")}</span>
                     </td>
                     <td className="p-3.5 font-medium text-foreground">
-                      INR {Number(item.proposed_amount ?? 0).toFixed(2)}
+                      {item.proposed_currency} {Number(item.proposed_amount ?? 0).toFixed(2)}
                     </td>
                     <td className="p-3.5 text-muted-foreground max-w-xs truncate" title={item.reason}>
                       {item.reason}
@@ -288,7 +324,8 @@ export default function SellerApprovalsPage() {
                 <div>
                   <span className="text-muted-foreground block text-[10px] uppercase">Proposed Amount</span>
                   <span className="text-foreground font-medium">
-                    INR {Number(selectedApproval.proposed_amount ?? 0).toFixed(2)}
+                    {selectedApproval.proposed_currency}{" "}
+                    {Number(selectedApproval.proposed_amount ?? 0).toFixed(2)}
                   </span>
                 </div>
               </div>

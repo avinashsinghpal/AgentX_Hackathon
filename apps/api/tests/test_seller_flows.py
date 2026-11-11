@@ -101,7 +101,7 @@ def test_policy_validation_and_publishing(client: TestClient) -> None:
     pub_res = client.post(
         "/api/v1/seller/policies",
         headers=headers,
-        json={"policy_yaml": DEFAULT_POLICY_YAML},
+        json={"policy_yaml": DEFAULT_POLICY_YAML, "confirm": True},
     )
     assert pub_res.status_code == 201
     assert pub_res.json()["version"] == 1
@@ -142,7 +142,7 @@ def test_seller_activation_flow(client: TestClient) -> None:
     client.post(
         "/api/v1/seller/policies",
         headers=headers,
-        json={"policy_yaml": DEFAULT_POLICY_YAML},
+        json={"policy_yaml": DEFAULT_POLICY_YAML, "confirm": True},
     )
 
     # Now activate

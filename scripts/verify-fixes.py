@@ -1,5 +1,7 @@
-import httpx
 import random
+
+import httpx
+
 
 def main():
     client = httpx.Client(base_url="http://127.0.0.1:3000", timeout=10.0)

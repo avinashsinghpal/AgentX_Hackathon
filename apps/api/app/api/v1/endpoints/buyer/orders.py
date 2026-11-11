@@ -8,6 +8,7 @@ from app.models.order import Order
 from app.models.seller import Seller, SellerCustomerLink
 from app.models.shipment import Shipment
 from app.schemas.buyer import BuyerOrderSummary, OrderLinkRequest
+from app.services.orders import order_items_payload
 
 router = APIRouter(prefix="/orders", tags=["Buyer Orders"])
 
@@ -50,18 +51,7 @@ def get_buyer_orders(
             .first()
         )
 
-        raw_items: list[dict[str, Any]] = o.items if isinstance(o.items, list) else []
-        normalized_items: list[dict[str, Any]] = []
-        for it in raw_items:
-            unit_price = float(it.get("unit_price") or it.get("price") or 0.0)
-            qty = int(it.get("quantity") or 1)
-            total_price = float(it.get("total_price") or (unit_price * qty))
-            normalized_items.append({
-                **it,
-                "unit_price": unit_price,
-                "total_price": total_price,
-                "quantity": qty,
-            })
+        normalized_items: list[dict[str, Any]] = order_items_payload(o)
 
         results.append(
             BuyerOrderSummary(
@@ -126,7 +116,7 @@ def link_order(
         .first()
     )
 
-    items_list: list[dict[str, Any]] = order.items if isinstance(order.items, list) else []
+    items_list: list[dict[str, Any]] = order_items_payload(order)
 
     return BuyerOrderSummary(
         id=order.id,

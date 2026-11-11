@@ -114,7 +114,7 @@ function ComplaintForm() {
         setUploadedFiles([
           ...uploadedFiles,
           {
-            id: data.id,
+            id: data.file_id ?? data.id,
             filename: file.name,
             size: file.size,
           },

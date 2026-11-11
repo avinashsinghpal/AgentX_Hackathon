@@ -2,13 +2,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String
-from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import JSONType
 
 if TYPE_CHECKING:
     from app.models.order import Order
+    from app.models.tracking_event import TrackingEvent
 
 
 class Shipment(Base):
@@ -54,10 +55,18 @@ class Shipment(Base):
         nullable=False,
         index=True,
     )  # "manifested" | "in_transit" | "out_for_delivery" | "delivered" | "failed_attempt" | "delayed"
+    # Legacy JSON snapshot; ``tracking_events`` rows are authoritative.  Written
+    # only by app.services.orders.sync_tracking_events.
     tracking_events: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
+        JSONType,
         default=list,
         nullable=False,
     )  # list of {timestamp, location, status, description}
 
     order: Mapped["Order"] = relationship("Order", back_populates="shipments")
+    tracking_event_rows: Mapped[list["TrackingEvent"]] = relationship(
+        "TrackingEvent",
+        back_populates="shipment",
+        cascade="all, delete-orphan",
+        order_by="TrackingEvent.event_timestamp",
+    )

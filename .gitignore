@@ -29,8 +29,8 @@ Desktop.ini
 .env
 .env*.local
 *.env
-! .env.example
-! apps/api/.env.example
+# ! .env.example
+# ! apps/api/.env.example
 
 # Node.js & Next.js Frontend
 node_modules/
@@ -74,8 +74,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+apps/api/lib/
+apps/api/lib64/
 parts/
 sdist/
 var/
@@ -128,3 +128,10 @@ uploads/
 logs/
 *.log
 
+# Miscellaneous
+*.repomixignore
+repomix-output.xml
+prompt.txt
+.freebuff/
+.cloud-attachments/
+.ruff_cache/

@@ -76,33 +76,51 @@ class FakeLLMClient(LLMClient):
         messages: list[LLMMessage],
         temperature: float = 0.1,
     ) -> LLMResponse:
-        user_msg = messages[-1].content.lower() if messages else ""
+        facts = messages[-1].content if messages else ""
 
-        # Deterministic grounded responses matching AgentX PS-04 scenarios
-        if "return" in user_msg or "size" in user_msg or "exchange" in user_msg:
+        def field(label: str) -> str:
+            match = re.search(rf"^- {re.escape(label)}: (.+)$", facts, re.MULTILINE)
+            return match.group(1).strip() if match else ""
+
+        order = field("Order") or "your order"
+        amount = field("Order amount") or "the order amount"
+        eligible = field("Eligible amount") or amount
+        issue = (field("Issue category") or "claim").replace("_", " ")
+        action = (field("Proposed action") or "resolution").replace("_", " ")
+        reason = field("Deterministic reason")
+        badge = field("Backend outcome badge")
+
+        # Quote the deterministic decision supplied in the facts.  The mock must
+        # never claim an action was executed when the backend is waiting for the
+        # seller, nor invent a policy window or amount.
+        if badge == "executed":
+            if "damage" in issue or "replacement" in action:
+                reply = (
+                    f"We inspected the photographic evidence for order {order} and verified the "
+                    f"transit damage claim. The {action} of {eligible} has been executed and "
+                    "recorded in the audit trail."
+                )
+            elif "delay" in issue or "credit" in action:
+                reply = (
+                    f"We verified the transit delay for order {order}. A proactive {action} of "
+                    f"{eligible} has been issued and recorded in the audit trail."
+                )
+            else:
+                reply = (
+                    f"We verified order {order} against the merchant policy. The {action} of "
+                    f"{eligible} has been executed and recorded in the audit trail."
+                )
+        elif badge == "needs_approval":
             reply = (
-                "I have verified your order delivery date against merchant return policy. "
-                "Your item is eligible for return within the 7-day window. "
-                "I have generated reverse pickup tracking label REV-DELHIVERY-99214. "
-                "Our courier partner will collect the packaged parcel from your delivery address. "
-                "Upon warehouse verification, your refund will be disbursed to your original payment method."
-            )
-        elif "damage" in user_msg or "broken" in user_msg or "defective" in user_msg:
-            reply = (
-                "I have inspected the photographic evidence provided and verified the shipment transit records. "
-                "The transit damage claim complies with merchant damage policy parameters. "
-                "A full replacement dispatch or refund has been executed."
-            )
-        elif "delay" in user_msg or "late" in user_msg or "tracking" in user_msg:
-            reply = (
-                "I have queried courier tracking telemetry. Your package has encountered unexpected "
-                "transit hub delay. As per merchant SLA policy, I have credited a proactive delay compensation "
-                "of INR 150.00 to your store account while courier priority escalation is underway."
+                f"We reviewed order {order}. {reason} This {issue} request requires merchant "
+                f"approval before {eligible} can be issued. No financial action has been "
+                "executed yet; the merchant has been notified and the case is pending approval."
             )
         else:
+            detail = f" {reason}" if reason else ""
             reply = (
-                "I have reviewed your inquiry and cross-referenced store fulfillment records. "
-                "All parameters have been verified in accordance with the merchant's declared resolution policy."
+                f"We reviewed order {order}.{detail} The {issue} request is not eligible for an "
+                "automated resolution, and no financial action has been taken."
             )
 
         clean_text = sanitize_no_emoji(reply)

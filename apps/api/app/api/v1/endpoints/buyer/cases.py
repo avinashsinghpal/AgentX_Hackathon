@@ -17,6 +17,8 @@ from app.schemas.buyer import (
     CaseSummaryItem,
 )
 from app.services.audit import AuditLogService
+from app.services.evidence import attach_case_evidence, case_evidence_ids
+from app.services.orders import order_items_payload
 
 router = APIRouter(prefix="/cases", tags=["Buyer Cases"])
 
@@ -85,6 +87,14 @@ def create_case(
     )
     db.add(new_case)
     db.flush()
+
+    # Link uploaded evidence through the authoritative case->file association.
+    attach_case_evidence(
+        db,
+        new_case,
+        data.evidence_urls,
+        uploader_id=buyer.user_id,
+    )
 
     # Initial buyer message
     initial_buyer_msg = CaseMessage(
@@ -207,7 +217,7 @@ def get_case_detail(
         .first()
     )
 
-    items_list: list[dict[str, Any]] = order.items if isinstance(order.items, list) else []
+    items_list: list[dict[str, Any]] = order_items_payload(order)
 
     order_summary = BuyerOrderSummary(
         id=order.id,
@@ -266,7 +276,7 @@ def get_case_detail(
         case=case_summary,
         order=order_summary,
         customer_narrative=c.customer_narrative,
-        evidence_urls=c.evidence_urls,
+        evidence_urls=case_evidence_ids(db, c),
         messages=message_items,
         outcome_details=c.outcome_details,
     )

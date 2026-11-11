@@ -1,29 +1,28 @@
+# ruff: noqa: E402 - app imports must happen after the environment is configured.
 import os
 from collections.abc import Generator
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-# Ensure test settings before importing app
+# Ensure test settings before importing app.  SQLite in-memory is the default so
+# the suite runs without external services.  Set TEST_DATABASE_URL (for example
+# postgresql+psycopg://user:pass@localhost:5432/sellerresolve_test) to run the
+# same suite against PostgreSQL; that database is dropped and recreated.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
 os.environ["ENV"] = "testing"
 os.environ["SECRET_KEY"] = "test-secret-key-32-chars-minimum-abcdef123456"
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from app.api.deps import get_db
 from app.core.security import create_session_token, generate_csrf_token
 from app.db.base import Base
+from app.db.session import build_engine
 from app.main import app
 
-# In-memory test engine
-test_engine = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+test_engine = build_engine(TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 
@@ -31,6 +30,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_
 def setup_test_db() -> Generator[None, None, None]:
     import app.models  # noqa: F401
 
+    Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
     yield
     Base.metadata.drop_all(bind=test_engine)

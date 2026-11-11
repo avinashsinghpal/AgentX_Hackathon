@@ -1,10 +1,10 @@
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import ForeignKey, String
-from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import JSONType
 
 if TYPE_CHECKING:
     from app.models.case import Case
@@ -27,7 +27,7 @@ class Buyer(Base):
         nullable=True,
     )
     default_shipping_address: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON,
+        JSONType,
         nullable=True,
     )
 

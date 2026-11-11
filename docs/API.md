@@ -77,23 +77,104 @@ Fetch and update operational parameters:
 - `serviceable_pincodes`: list[string]
 - `warehouse_address`: object
 
-### `GET /seller/policies/active`
-Retrieves currently published, active policy AST and raw YAML.
+### Seller policy configuration
 
-### `POST /seller/policies`
-Validates and publishes a new seller policy version.
-- **Request Body:**
-  ```json
-  {
-    "policy_yaml": "returns:\n  window_days: 14\nrefunds:\n  auto_approve_max_amount: 50.00\n..."
-  }
-  ```
+Policies are edited in the Seller Console as a structured document, validated by
+`PolicySchema`, rendered into canonical YAML by the backend, and published as an
+immutable per-seller version. Monetary inputs are integer rupees with an explicit
+`currency`; the server converts them exactly once into integer paise
+(`paise = rupees * 100`) and returns the minor-unit snapshot as `monetary_minor`.
+See [Policy Engine Schema](policy-schema.md) for every field and invariant.
+
+All endpoints require a seller session and are scoped to the authenticated
+seller. Errors use the standard envelope: `{"error": {"code", "message", "request_id", "details?"}}`.
+
+### `GET /seller/policies/active`
+Returns the active policy, or a baseline template when nothing is published.
+
+```json
+{
+  "has_policy": true,
+  "valid": true,
+  "id": "...",
+  "version": 2,
+  "next_version": 3,
+  "currency": "INR",
+  "policy_yaml": "version: 2\ncurrency: INR\n...",
+  "config": { "version": 2, "currency": "INR", "returns": {}, "refunds": {}, "delays": {}, "damage_claims": {}, "fraud_checks": {} },
+  "parsed_rules": { "version": 2, "currency": "INR", "returns": {} },
+  "monetary_minor": { "currency": "INR", "minor_unit_exponent": 2, "refund_auto_approve_ceiling_minor": 200000, "...": "..." },
+  "activated_at": "2026-11-10T10:00:00Z",
+  "created_at": "2026-11-10T10:00:00Z",
+  "source": "structured",
+  "content_sha256": "..."
+}
+```
+
+### `GET /seller/policies/history`
+Lists every version, newest first, with currency, publication/activation times,
+source, checksum, return window and refund ceiling (major and minor units).
+
+### `GET /seller/policies/versions/{version}`
+Returns one immutable version as the same document shape as `/active`. Another
+seller's version returns `404`.
+
+### `POST /seller/policies/validate-config`
+Validates structured JSON against `PolicySchema`. Unknown, missing or
+contradictory fields return `422` with field paths in `error.details`.
+
+```json
+{ "config": { "version": 1, "currency": "INR", "returns": {}, "refunds": {}, "delays": {}, "damage_claims": {}, "fraud_checks": {} } }
+```
+
+### `POST /seller/policies/preview`
+Validates the structured config and returns the canonical YAML without
+publishing, plus `monetary_minor` and non-blocking `warnings`. A policy whose
+currency differs from the store currency, or whose two approval ceilings
+disagree, returns `400`.
+
+```json
+{ "config": { "version": 1, "currency": "INR", "returns": {}, "refunds": {}, "delays": {}, "damage_claims": {}, "fraud_checks": {} } }
+```
+
+### `POST /seller/policies/validate`
+Validates manually edited YAML with the same schema. Invalid input returns
+`200 { "valid": false, "error": "..." }`; valid input returns the canonical YAML,
+normalized `config` and `monetary_minor`.
+
+```json
+{ "policy_yaml": "version: 1\ncurrency: INR\nreturns:\n  window_days: 14\n..." }
+```
+
+### `POST /seller/policies/publish`
+Publishes a new immutable version. Exactly one of `config` or `policy_yaml` is
+required, and `confirm` must be `true`; otherwise the request is rejected.
+`expected_active_version` (`0` when no policy exists) rejects a stale edit with
+`409` instead of publishing on top of someone else's change.
+
+```json
+{
+  "config": { "version": 1, "currency": "INR", "returns": {}, "refunds": {}, "delays": {}, "damage_claims": {}, "fraud_checks": {} },
+  "confirm": true,
+  "expected_active_version": 2
+}
+```
+
+Response (`201`): `success`, `id`, `version`, `previous_version`, `currency`,
+`policy_yaml`, `config`, `parsed_rules`, `monetary_minor`, `activated_at`,
+`source` and `content_sha256`.
+
+### `POST /seller/policies` (deprecated)
+Backward-compatible raw-YAML publication. Body requires `policy_yaml` and
+`confirm: true`; it delegates to the same publication service as `/publish`.
 
 ### `GET /seller/approvals`
-List all pending human-in-the-loop escalations with case context and requested actions.
+List pending human-in-the-loop escalations with case context and requested actions.
+Each item includes `requested_amount_minor`, `currency`, `policy_evaluation_id`,
+`expires_at`, the case summary and the order line items.
 
 ### `POST /seller/approvals/{id}/decide`
-Submit decision for a pending escalation:
+Submit a decision for a pending escalation:
 - **Request Body:**
   ```json
   {
@@ -101,6 +182,24 @@ Submit decision for a pending escalation:
     "seller_notes": "Damage photo verified. Authorized replacement."
   }
   ```
+- **Response (200 OK):**
+  ```json
+  {
+    "success": true,
+    "approval_id": "…",
+    "status": "approved",
+    "executed": true,
+    "action_id": "…",
+    "failure_reason": null,
+    "case_status": "resolved",
+    "case_decision": "executed"
+  }
+  ```
+  Approval authorizes execution; it is not proof of execution. `executed` is only
+  `true` after the provider operation was verified. A verified failure returns
+  `executed: false` with `failure_reason` and leaves the case unresolved. Repeated
+  decisions return HTTP 400, expired requests are marked `expired`, and another
+  seller's request returns HTTP 404.
 
 ### `GET /seller/customers/invites` & `POST /seller/customers/invites`
 List and generate customer invitation tokens for store onboarding.
@@ -210,6 +309,9 @@ Server-Sent Events (SSE) stream delivering real-time agent investigation tokens 
 ## 5. File Uploads (`/uploads`)
 
 ### `POST /uploads`
+Multipart upload (image/PDF evidence). If `case_id` is supplied, the caller must
+own that case (buyer of the case or its seller); otherwise the API returns 403.
+Downloads are authorized the same way: uploader, case buyer or case seller only.
 Upload photographic evidence for damage claims.
 - **Validation:** Enforces 5MB size limit and validates magic byte signatures (`image/jpeg`, `image/png`, `image/webp`).
 - **Response (200 OK):**

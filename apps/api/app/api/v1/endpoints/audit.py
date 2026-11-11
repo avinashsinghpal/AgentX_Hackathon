@@ -31,6 +31,7 @@ def list_audit_logs(
         "records": [
             {
                 "id": r.id,
+                "sequence": r.sequence,
                 "timestamp": r.timestamp.isoformat(),
                 "actor_role": r.actor_role,
                 "actor_id": r.actor_id,
@@ -51,11 +52,16 @@ def verify_audit_chain(
     db: DbSession,
 ) -> dict[str, Any]:
     is_valid, error_msg = AuditLogService.verify_chain(db, seller_id=seller.id)
-    total_records = db.query(AuditLog).filter(AuditLog.seller_id == seller.id).count()
+    chain = db.query(AuditLog).filter(AuditLog.seller_id == seller.id)
+    total_records = chain.count()
+    latest = chain.order_by(AuditLog.timestamp.desc()).first()
+    genesis = chain.order_by(AuditLog.timestamp.asc()).first()
     return {
         "valid": is_valid,
         "record_count": total_records,
         "error": error_msg,
+        "latest_hash": latest.current_hash if latest else None,
+        "genesis_hash": genesis.current_hash if genesis else None,
     }
 
 

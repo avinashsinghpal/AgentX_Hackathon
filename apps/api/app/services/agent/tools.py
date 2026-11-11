@@ -1,25 +1,25 @@
-import uuid
-from dataclasses import dataclass
+"""Backward-compatible investigation tool façade.
+
+The authoritative implementation now lives in the policy and action services.
+This module keeps the historical ``ResolutionTools`` entry points working for
+older callers while delegating all decisions and mutations to the new services.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.case import ApprovalRequest, Case
+from app.models.case import Case
 from app.models.order import Order
-from app.models.seller import SellerPolicy
 from app.models.shipment import Shipment
-from app.services.audit import AuditLogService
-
-
-@dataclass
-class PolicyEvaluationResult:
-    eligible: bool
-    decision: str  # "executed" | "needs_approval" | "not_eligible"
-    action: str  # "issue_return_label" | "instant_refund" | "escalate_for_approval" | "reject"
-    amount: float
-    reason: str
-    details: dict[str, Any]
+from app.services.orders import order_items_payload, tracking_events_payload
+from app.services.policy.evaluator import PolicyEvaluationService
+from app.services.policy.result import Decision
+from app.services.resolution import ResolutionService
 
 
 def ensure_utc(dt: datetime) -> datetime:
@@ -28,22 +28,50 @@ def ensure_utc(dt: datetime) -> datetime:
     return dt.astimezone(UTC)
 
 
+@dataclass
+class PolicyEvaluationResult:
+    """Legacy shape retained for compatibility."""
+
+    eligible: bool
+    decision: str  # "executed" | "needs_approval" | "not_eligible"
+    action: str
+    amount: float
+    reason: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+_ACTION_BY_PROPOSED = {
+    "refund": "instant_refund",
+    "wallet_credit": "instant_refund",
+    "return_label": "issue_return_label",
+}
+
+_BADGE_BY_DECISION = {
+    Decision.ELIGIBLE: "executed",
+    Decision.NEEDS_APPROVAL: "needs_approval",
+    Decision.MANUAL_REVIEW: "needs_approval",
+    Decision.NOT_ELIGIBLE: "not_eligible",
+}
+
+
 class ResolutionTools:
     @staticmethod
     def lookup_order(db: Session, order_id: str) -> dict[str, Any] | None:
         order = db.query(Order).filter(Order.id == order_id).first()
         if not order:
             return None
+        items = order_items_payload(order)
         return {
             "order_number": order.order_number,
             "order_date": order.order_date.isoformat(),
             "total_amount": order.total_amount / 100.0,
+            "total_amount_minor": order.total_amount,
             "currency": order.currency,
             "order_status": order.order_status,
             "payment_status": order.payment_status,
             "payment_method": order.payment_method,
-            "items_count": len(order.items) if isinstance(order.items, list) else 0,
-            "items": order.items,
+            "items_count": len(items),
+            "items": items,
         }
 
     @staticmethod
@@ -70,6 +98,7 @@ class ResolutionTools:
             "actual_delivery_date": (
                 shipment.actual_delivery_date.isoformat() if shipment.actual_delivery_date else None
             ),
+            "tracking_events": tracking_events_payload(shipment),
         }
 
     @staticmethod
@@ -80,119 +109,29 @@ class ResolutionTools:
         issue_category: str,
         evidence_count: int,
     ) -> PolicyEvaluationResult:
-        policy = (
-            db.query(SellerPolicy)
-            .filter(SellerPolicy.seller_id == seller_id, SellerPolicy.is_active.is_(True))
-            .first()
+        """Deterministic evaluation through the shared engine (read-only)."""
+        evaluation = PolicyEvaluationService().evaluate_order_category(
+            db,
+            order=order,
+            seller_id=seller_id,
+            buyer_id=order.buyer_id,
+            issue_category=issue_category,
+            evidence_count=evidence_count,
+            persist=False,
         )
-
-        rules = policy.parsed_rules if (policy and policy.parsed_rules) else {}
-        returns_rule = rules.get("returns", {})
-        refunds_rule = rules.get("refunds", {})
-        damage_rule = rules.get("damage_claims", {})
-
-        window_days = returns_rule.get("window_days", 7)
-        auto_approve_max = float(refunds_rule.get("auto_approve_max_amount", 2000.0))
-        instant_refund_thresh = float(
-            refunds_rule.get("instant_refund_without_return_threshold", 500.0)
-        )
-        photo_required = damage_rule.get("photo_evidence_required", True)
-
-        order_amount_inr = order.total_amount / 100.0
-
-        # Find delivery date
-        shipment = (
-            db.query(Shipment)
-            .filter(Shipment.order_id == order.id)
-            .order_by(Shipment.created_at.desc())
-            .first()
-        )
-        delivery_date = shipment.actual_delivery_date if shipment else None
-        now = datetime.now(UTC)
-
-        days_since_delivery = 0
-        if delivery_date:
-            days_since_delivery = (now - ensure_utc(delivery_date)).days
-
-        # 1. Eligibility Check: Return window check (overdue returns are categorically rejected)
-        if issue_category in ["return", "damaged"] and delivery_date:
-            if days_since_delivery > window_days:
-                return PolicyEvaluationResult(
-                    eligible=False,
-                    decision="not_eligible",
-                    action="reject",
-                    amount=0.0,
-                    reason=(
-                        f"Order was delivered {days_since_delivery} days ago, exceeding the "
-                        f"{window_days}-day merchant return policy window."
-                    ),
-                    details={
-                        "days_since_delivery": days_since_delivery,
-                        "window_days": window_days,
-                    },
-                )
-
-        # 2. Eligibility Check: Damage claim photo requirement
-        if issue_category == "damaged" and photo_required and evidence_count == 0:
-            return PolicyEvaluationResult(
-                eligible=False,
-                decision="not_eligible",
-                action="reject",
-                amount=0.0,
-                reason=(
-                    "Merchant policy requires photographic evidence for transit defect and damage claims. "
-                    "Please attach photos of the outer box and affected item."
-                ),
-                details={"evidence_count": evidence_count, "photo_required": True},
-            )
-
-        # 3. Financial Ceiling Check: Orders exceeding auto-approve ceiling require seller approval
-        if order_amount_inr > auto_approve_max:
-            return PolicyEvaluationResult(
-                eligible=True,
-                decision="needs_approval",
-                action="escalate_for_approval",
-                amount=order_amount_inr,
-                reason=(
-                    f"Order value INR {order_amount_inr:.2f} exceeds merchant automated "
-                    f"approval ceiling of INR {auto_approve_max:.2f}. "
-                    "Escalated to merchant for 1-click decision."
-                ),
-                details={
-                    "order_amount": order_amount_inr,
-                    "ceiling": auto_approve_max,
-                    "days_since_delivery": days_since_delivery,
-                },
-            )
-
-        # 4. Instant refund under low threshold without return freight
-        if order_amount_inr <= instant_refund_thresh and issue_category == "damaged":
-            return PolicyEvaluationResult(
-                eligible=True,
-                decision="executed",
-                action="instant_refund",
-                amount=order_amount_inr,
-                reason=(
-                    f"Claim value INR {order_amount_inr:.2f} qualifies for instant settlement "
-                    f"under INR {instant_refund_thresh:.2f} threshold without reverse pickup."
-                ),
-                details={"instant_refund": True, "amount": order_amount_inr},
-            )
-
-        # 5. Standard return label generation within parameters
+        result = evaluation.result
         return PolicyEvaluationResult(
-            eligible=True,
-            decision="executed",
-            action="issue_return_label",
-            amount=order_amount_inr,
-            reason=(
-                f"Order is within the {window_days}-day window and below INR {auto_approve_max:.2f} ceiling. "
-                "Reverse pickup label issued automatically."
-            ),
+            eligible=result.decision is Decision.ELIGIBLE,
+            decision=_BADGE_BY_DECISION[result.decision],
+            action=_ACTION_BY_PROPOSED.get(result.proposed_action, "reject")
+            if result.decision in {Decision.ELIGIBLE, Decision.NEEDS_APPROVAL}
+            else "reject",
+            amount=result.eligible_amount_minor / 100.0,
+            reason=result.reason,
             details={
-                "window_days": window_days,
-                "auto_approved": True,
-                "amount": order_amount_inr,
+                "reason_code": result.reason_code,
+                "policy_version": result.policy_version,
+                "checks": [check.model_dump(mode="json") for check in result.checks],
             },
         )
 
@@ -201,148 +140,40 @@ class ResolutionTools:
         db: Session,
         case: Case,
         order: Order,
-        evaluation: PolicyEvaluationResult,
+        evaluation: PolicyEvaluationResult | None = None,
     ) -> dict[str, Any]:
-        """Executes the deterministic action and cryptographically signs into audit trail."""
-        now = datetime.now(UTC)
+        """Run the authoritative resolution path for an existing case.
 
-        if evaluation.action == "issue_return_label":
-            reverse_awb = f"REV-DELHIVERY-{uuid.uuid4().hex[:6].upper()}"
-            case.status = "resolved"
-            case.decision = "executed"
-            case.resolution_type = "return_label"
-            case.outcome_details = {
-                "reverse_awb": reverse_awb,
-                "courier": "Delhivery",
-                "pickup_status": "manifested",
-                "reason": evaluation.reason,
-            }
-            case.resolved_at = now
-            db.commit()
-
-            AuditLogService.log_action(
-                db=db,
-                action="resolution.executed",
-                actor_role="agent",
-                actor_id=None,
-                seller_id=case.seller_id,
-                case_id=case.id,
-                payload={
-                    "resolution_type": "return_label",
-                    "reverse_awb": reverse_awb,
-                    "order_number": order.order_number,
-                    "amount": evaluation.amount,
-                },
-            )
-
-            return {
-                "status": "executed",
-                "resolution_type": "return_label",
-                "reverse_awb": reverse_awb,
-                "verified": True,
-            }
-
-        elif evaluation.action == "instant_refund":
-            order.payment_status = "refunded"
-            case.status = "resolved"
-            case.decision = "executed"
-            case.resolution_type = "refund"
-            case.outcome_details = {
-                "refunded_amount": evaluation.amount,
-                "payment_status": "refunded",
-                "reason": evaluation.reason,
-            }
-            case.resolved_at = now
-            db.commit()
-
-            AuditLogService.log_action(
-                db=db,
-                action="resolution.executed",
-                actor_role="agent",
-                actor_id=None,
-                seller_id=case.seller_id,
-                case_id=case.id,
-                payload={
-                    "resolution_type": "refund",
-                    "order_number": order.order_number,
-                    "amount": evaluation.amount,
-                },
-            )
-
-            return {
-                "status": "executed",
-                "resolution_type": "refund",
-                "amount": evaluation.amount,
-                "verified": True,
-            }
-
-        elif evaluation.action == "escalate_for_approval":
-            case.status = "pending_approval"
-            case.decision = "needs_approval"
-            case.outcome_details = {
-                "escalated": True,
-                "reason": evaluation.reason,
-            }
-
-            approval = ApprovalRequest(
-                case_id=case.id,
-                seller_id=case.seller_id,
-                reason=evaluation.reason,
-                auto_evaluation_summary=evaluation.details,
-                requested_action={
-                    "action": "refund",
-                    "amount": evaluation.amount,
-                },
-                status="pending",
-            )
-            db.add(approval)
-            db.commit()
-
-            AuditLogService.log_action(
-                db=db,
-                action="approval.requested",
-                actor_role="agent",
-                actor_id=None,
-                seller_id=case.seller_id,
-                case_id=case.id,
-                payload={
-                    "order_number": order.order_number,
-                    "reason": evaluation.reason,
-                    "proposed_amount": evaluation.amount,
-                },
-            )
-
+        The previously computed legacy evaluation is not trusted for amounts or
+        authorization; the deterministic engine re-evaluates from the database.
+        """
+        service = ResolutionService()
+        investigation = service.investigate(db, case.id)
+        decision = service.decide(db, investigation)
+        if decision.approval is not None:
             return {
                 "status": "needs_approval",
-                "approval_id": approval.id,
+                "approval_id": decision.approval.id,
+                "verified": False,
+            }
+        if decision.action_run is not None and decision.action_run.executed:
+            action = decision.action_run.action
+            return {
+                "status": "executed",
+                "resolution_type": case.resolution_type,
+                "amount": (action.amount_minor or 0) / 100.0,
+                "amount_minor": action.amount_minor,
+                "provider_reference": action.external_reference,
                 "verified": True,
             }
-
-        else:  # reject
-            case.status = "rejected"
-            case.decision = "not_eligible"
-            case.outcome_details = {
-                "rejected": True,
-                "reason": evaluation.reason,
-            }
-            case.resolved_at = now
-            db.commit()
-
-            AuditLogService.log_action(
-                db=db,
-                action="resolution.rejected",
-                actor_role="agent",
-                actor_id=None,
-                seller_id=case.seller_id,
-                case_id=case.id,
-                payload={
-                    "order_number": order.order_number,
-                    "reason": evaluation.reason,
-                },
-            )
-
+        if decision.evaluation.decision is Decision.NOT_ELIGIBLE:
             return {
                 "status": "not_eligible",
-                "reason": evaluation.reason,
-                "verified": True,
+                "reason": decision.evaluation.reason,
+                "verified": False,
             }
+        return {
+            "status": "failed",
+            "reason": decision.action_run.reason if decision.action_run else "not executed",
+            "verified": False,
+        }
