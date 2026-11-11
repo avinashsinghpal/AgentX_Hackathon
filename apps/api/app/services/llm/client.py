@@ -216,10 +216,55 @@ class GeminiLLMClient(LLMClient):
         messages: list[LLMMessage],
         temperature: float = 0.1,
     ) -> AsyncGenerator[str, None]:
-        res = await self.generate_response(messages, temperature)
-        words = res.text.split(" ")
-        for w in words:
-            yield w + " "
+        contents: list[dict[str, Any]] = []
+        system_instruction = ZERO_EMOJI_SYSTEM_PROMPT
+        for message in messages:
+            if message.role == "system":
+                system_instruction += "\n" + message.content
+            else:
+                role = "user" if message.role == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": message.content}]})
+
+        url = (
+            f"{self.base_url}/models/{self.model}:streamGenerateContent"
+            f"?alt=sse&key={self.api_key}"
+        )
+        payload = {
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": contents,
+            "generationConfig": {"temperature": temperature, "maxOutputTokens": 1024},
+        }
+        try:
+            import json
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    if response.status_code != 200:
+                        raise LLMProviderError(
+                            f"Gemini stream failed with HTTP {response.status_code}"
+                        )
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        candidates = data.get("candidates") or []
+                        if not candidates:
+                            continue
+                        content = candidates[0].get("content") or {}
+                        for part in content.get("parts") or []:
+                            text = part.get("text")
+                            if text:
+                                yield sanitize_no_emoji(text)
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            raise LLMProviderError("Gemini streaming failed") from exc
 
     async def generate_with_tools(
         self,
@@ -281,13 +326,14 @@ class GeminiLLMClient(LLMClient):
                 text_parts = [part.get("text", "") for part in parts if part.get("text")]
                 return sanitize_no_emoji("".join(text_parts).strip())
 
-            # Execute the first function call and feed its result back.
-            function_call = function_calls[0]
+            # Preserve the original model part, including thought signatures.
+            model_part = next(part for part in parts if part.get("functionCall"))
+            function_call = model_part["functionCall"]
             tool_name = str(function_call.get("name") or "")
             arguments = function_call.get("args") or {}
             if not isinstance(arguments, dict):
                 arguments = {}
-            contents.append({"role": "model", "parts": [{"functionCall": function_call}]})
+            contents.append({"role": "model", "parts": [model_part]})
             try:
                 observation = await tool_executor(tool_name, arguments)
             except Exception as exc:

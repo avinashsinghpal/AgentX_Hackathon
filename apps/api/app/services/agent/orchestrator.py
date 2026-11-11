@@ -20,11 +20,14 @@ from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseMessage
 from app.models.order import Order
+from app.models.shipment import Shipment
+from app.services.agent.intake import BuyerIntake, IntakeService
 from app.services.agent.tool_schemas import TOOL_INPUT_SCHEMAS, validate_tool_arguments
 from app.services.agent.tools import ResolutionTools
 from app.services.approvals import ApprovalService
-from app.services.llm.client import LLMClient, get_llm_client
-from app.services.policy.evaluator import PolicyEvaluationService
+from app.services.llm.client import GeminiLLMClient, LLMClient, LLMMessage, get_llm_client
+from app.services.orders import tracking_events_payload
+from app.services.policy.evaluator import PolicyEvaluationService, load_policy
 from app.services.resolution import ResolutionService
 from app.services.risk import RiskEvaluationService
 
@@ -79,6 +82,26 @@ class ResolutionOrchestrator:
                 "name": "escalate_to_human",
                 "description": "Create or reuse a seller approval request for a high-risk or policy-escalated case.",
                 "arguments": {"reason": "optional explanation"},
+            },
+            {
+                "name": "get_tracking_events",
+                "description": "Retrieve normalized tracking events for the case's shipment.",
+                "arguments": {},
+            },
+            {
+                "name": "get_buyer_history",
+                "description": "Retrieve deterministic buyer case and refund history aggregates.",
+                "arguments": {"limit": "optional number of recent cases"},
+            },
+            {
+                "name": "get_evidence_summary",
+                "description": "Retrieve evidence metadata and hashes associated with the case.",
+                "arguments": {},
+            },
+            {
+                "name": "get_policy_summary",
+                "description": "Retrieve the active seller policy summary for the case.",
+                "arguments": {},
             },
         ]
 
@@ -219,6 +242,70 @@ class ResolutionOrchestrator:
                 "status": approval.status,
             }
 
+        if tool_name == "get_tracking_events":
+            shipment = (
+                db.query(Shipment)
+                .filter(Shipment.order_id == order.id)
+                .order_by(Shipment.created_at.desc())
+                .first()
+            )
+            if shipment is None:
+                return []
+            return tracking_events_payload(shipment)
+
+        if tool_name == "get_buyer_history":
+            limit = int(arguments.get("limit") or 20)
+            limit = max(1, min(limit, 100))
+            if case.buyer_id is None:
+                return {"case_count": 0, "recent_cases": []}
+            cases = (
+                db.query(Case)
+                .filter(Case.buyer_id == case.buyer_id)
+                .order_by(Case.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return {
+                "case_count": len(cases),
+                "recent_cases": [
+                    {
+                        "case_number": item.case_number,
+                        "status": item.status,
+                        "decision": item.decision,
+                        "issue_category": item.issue_category,
+                    }
+                    for item in cases
+                ],
+            }
+
+        if tool_name == "get_evidence_summary":
+            from app.models.file_upload import FileUpload
+
+            rows = db.query(FileUpload).filter(FileUpload.case_id == case.id).all()
+            return {
+                "count": len(rows),
+                "files": [
+                    {
+                        "id": row.id,
+                        "original_filename": row.original_filename,
+                        "mime_type": row.mime_type,
+                        "size_bytes": row.file_size_bytes,
+                    }
+                    for row in rows
+                ],
+            }
+
+        if tool_name == "get_policy_summary":
+            policy_row, policy, invalid = load_policy(db, case.seller_id)
+            if policy is None:
+                return {"available": False, "invalid": invalid}
+            return {
+                "available": True,
+                "version": policy_row.version if policy_row else None,
+                "parsed_rules": policy_row.parsed_rules if policy_row else None,
+                "invalid": invalid,
+            }
+
         raise ValueError(f"Unknown tool: {tool_name}")
 
     async def process_case_resolution(
@@ -263,6 +350,62 @@ class ResolutionOrchestrator:
         if outcome.message is None:  # pragma: no cover - persist_message defaults True
             raise RuntimeError("Resolution did not persist an agent message")
         return outcome.message
+
+    async def classify_intake(self, message: str) -> BuyerIntake:
+        service = IntakeService(llm_client=self.llm)
+        return await service.classify(message)
+
+    async def investigate_case(
+        self,
+        case_id: str,
+        *,
+        db: Session | None = None,
+        user_message: str | None = None,
+        max_tool_calls: int = 6,
+    ) -> dict[str, Any]:
+        """Run a read-only native Gemini investigation and return its trace."""
+        db = db or self.db
+        if db is None:
+            raise ValueError("A database session is required")
+
+        case = db.query(Case).filter(Case.id == case_id).first()
+        if case is None:
+            raise ValueError(f"Case {case_id} not found")
+
+        read_only_tools = [
+            tool
+            for tool in self.tool_declarations
+            if tool["name"]
+            in {
+                "lookup_order",
+                "lookup_shipment",
+                "get_tracking_events",
+                "get_buyer_history",
+                "get_evidence_summary",
+                "get_policy_summary",
+                "get_conversation_history",
+                "get_case",
+            }
+        ]
+
+        async def tool_executor(tool_name: str, arguments: dict[str, Any]) -> Any:
+            return await self.execute_tool(db, case_id, tool_name, arguments)
+
+        prompt = (
+            "You are investigating a buyer support case. Use the available read-only tools "
+            "to gather verified facts. Do not make decisions or execute actions. "
+            "Summarize the investigation findings."
+        )
+        if user_message:
+            prompt += f"\nBuyer message: {user_message}"
+        messages = [LLMMessage(role="user", content=prompt)]
+        if isinstance(self.llm, GeminiLLMClient):
+            text = await self.llm.generate_with_tools(
+                messages, read_only_tools, tool_executor, max_tool_calls
+            )
+        else:
+            text = (await self.llm.generate_response(messages)).text
+        return {"case_id": case_id, "summary": text}
 
     async def stream_case_resolution(
         self,

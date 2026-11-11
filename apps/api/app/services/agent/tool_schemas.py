@@ -47,6 +47,22 @@ class EscalateToHumanArgs(StrictModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class GetTrackingEventsArgs(StrictModel):
+    pass
+
+
+class GetBuyerHistoryArgs(StrictModel):
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class GetEvidenceSummaryArgs(StrictModel):
+    pass
+
+
+class GetPolicySummaryArgs(StrictModel):
+    pass
+
+
 class ToolErrorResult(BaseModel):
     error: str
     tool: str | None = None
@@ -65,6 +81,10 @@ TOOL_INPUT_SCHEMAS: dict[str, type[StrictModel]] = {
     "get_conversation_history": GetConversationHistoryArgs,
     "resolve_case": ResolveCaseArgs,
     "escalate_to_human": EscalateToHumanArgs,
+    "get_tracking_events": GetTrackingEventsArgs,
+    "get_buyer_history": GetBuyerHistoryArgs,
+    "get_evidence_summary": GetEvidenceSummaryArgs,
+    "get_policy_summary": GetPolicySummaryArgs,
 }
 
 
