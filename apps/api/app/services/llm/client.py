@@ -221,7 +221,7 @@ class GeminiLLMClient(LLMClient):
                 role = "user" if m.role == "user" else "model"
                 contents.append({"role": role, "parts": [{"text": m.content}]})
 
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        url = f"{self.base_url}/models/{self.model}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": contents,
@@ -233,7 +233,11 @@ class GeminiLLMClient(LLMClient):
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                res = await client.post(url, json=payload)
+                res = await client.post(
+                    url,
+                    json=payload,
+                    headers={"x-goog-api-key": self.api_key},
+                )
                 if res.status_code != 200:
                     logger.error("Gemini API error: %s", res.text)
                     raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
@@ -261,9 +265,7 @@ class GeminiLLMClient(LLMClient):
                 role = "user" if message.role == "user" else "model"
                 contents.append({"role": role, "parts": [{"text": message.content}]})
 
-        url = (
-            f"{self.base_url}/models/{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
-        )
+        url = f"{self.base_url}/models/{self.model}:streamGenerateContent?alt=sse"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": contents,
@@ -273,7 +275,12 @@ class GeminiLLMClient(LLMClient):
             import json
 
             async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream("POST", url, json=payload) as response:
+                async with client.stream(
+                    "POST",
+                    url,
+                    json=payload,
+                    headers={"x-goog-api-key": self.api_key},
+                ) as response:
                     if response.status_code != 200:
                         raise LLMProviderError(
                             f"Gemini stream failed with HTTP {response.status_code}"
@@ -342,7 +349,7 @@ class GeminiLLMClient(LLMClient):
             response = await self.generate_response(messages, temperature)
             return response.text
 
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        url = f"{self.base_url}/models/{self.model}:generateContent"
         used_calls = 0
 
         async def final_response(retry: bool = False) -> str:
@@ -353,7 +360,11 @@ class GeminiLLMClient(LLMClient):
             }
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.post(url, json=payload)
+                    res = await client.post(
+                        url,
+                        json=payload,
+                        headers={"x-goog-api-key": self.api_key},
+                    )
                     if res.status_code != 200:
                         raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
                     data = res.json()
@@ -404,7 +415,11 @@ class GeminiLLMClient(LLMClient):
 
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.post(url, json=payload)
+                    res = await client.post(
+                        url,
+                        json=payload,
+                        headers={"x-goog-api-key": self.api_key},
+                    )
                     if res.status_code != 200:
                         raise LLMProviderError(f"Gemini request failed with HTTP {res.status_code}")
                     data = res.json()

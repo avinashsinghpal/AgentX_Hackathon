@@ -19,7 +19,7 @@ def _script_directory() -> ScriptDirectory:
 def test_migration_graph_has_a_single_head() -> None:
     script = _script_directory()
     heads = script.get_heads()
-    assert heads == ["d5e6f7a8b9c0"], heads
+    assert heads == ["e7f8a9b0c1d2"], heads
 
 
 def test_applied_revisions_are_never_rewritten() -> None:

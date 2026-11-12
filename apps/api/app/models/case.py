@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -216,6 +217,14 @@ class ApprovalRequest(Base):
 
 class CaseMessage(Base):
     __tablename__ = "case_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "sender_role",
+            "client_message_id",
+            name="uq_case_messages_client_request",
+        ),
+    )
 
     case_id: Mapped[str] = mapped_column(
         String(36),
@@ -239,5 +248,6 @@ class CaseMessage(Base):
         String(32),
         nullable=True,
     )  # "executed" | "needs_approval" | "not_eligible"
+    client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     case: Mapped["Case"] = relationship("Case", back_populates="messages")

@@ -1,5 +1,4 @@
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -72,7 +71,6 @@ def create_case(
             else None,
         )
 
-    now = datetime.now(UTC)
     case_number = f"CAS-{uuid.uuid4().hex[:8].upper()}"
 
     new_case = Case(
@@ -104,23 +102,15 @@ def create_case(
     )
     db.add(initial_buyer_msg)
 
-    # Initial Agent Acknowledgment message
+    # Acknowledge receipt without implying that an investigation has already run.
     initial_agent_msg = CaseMessage(
         case_id=new_case.id,
         sender_role="agent",
         message=(
-            f"Hello. I am the autonomous resolution agent for {order.seller.store_name if order.seller else 'this merchant'}. "
-            f"I have received your inquiry regarding order {order.order_number} and am cross-referencing "
-            f"courier records and merchant return policies now."
+            f"Hello. I am the support agent for {order.seller.store_name if order.seller else 'this merchant'}. "
+            f"I have received your inquiry about order {order.order_number}. You can reply in this "
+            "room with any additional details."
         ),
-        tool_calls=[
-            {
-                "tool_name": "verify_order_record",
-                "tool_args": {"order_number": order.order_number},
-                "outcome": "Order record retrieved. Payment status verified.",
-                "timestamp": now.isoformat(),
-            }
-        ],
     )
     db.add(initial_agent_msg)
 

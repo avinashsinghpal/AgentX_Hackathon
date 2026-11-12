@@ -6,17 +6,8 @@ import {
   MessageSquare,
   Clock,
   CheckCircle2,
-  AlertTriangle,
   XCircle,
   RefreshCw,
-  Search,
-  ExternalLink,
-  Bot,
-  User,
-  ChevronDown,
-  ChevronUp,
-  ShieldCheck,
-  Package,
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
@@ -34,43 +25,9 @@ interface CaseSummary {
   resolved_at?: string | null;
 }
 
-interface CaseDetail {
-  case: CaseSummary;
-  order: {
-    id: string;
-    order_number: string;
-    seller_name: string;
-    total_amount: number;
-    currency: string;
-    order_status: string;
-    payment_method: string;
-    tracking_number?: string | null;
-    carrier?: string | null;
-  };
-  customer_narrative: string;
-  evidence_urls: string[];
-  messages: Array<{
-    id: string;
-    sender_role: string;
-    message: string;
-    tool_calls?: Array<{
-      tool_name: string;
-      tool_args: Record<string, unknown>;
-      outcome: string;
-      timestamp: string;
-    }> | null;
-    decision_badge?: string | null;
-    created_at: string;
-  }>;
-}
-
 export default function BuyerCasesPage() {
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [expandedInvestigations, setExpandedInvestigations] = useState<Record<string, boolean>>({});
 
   const fetchCases = async () => {
     try {
@@ -92,31 +49,6 @@ export default function BuyerCasesPage() {
   useEffect(() => {
     fetchCases();
   }, []);
-
-  const openCaseDetail = async (caseId: string) => {
-    try {
-      setSelectedCaseId(caseId);
-      setLoadingDetail(true);
-      const res = await fetch(`/api/v1/buyer/cases/${caseId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCaseDetail(data);
-      } else {
-        toast.error("Failed to load case detail");
-      }
-    } catch {
-      toast.error("Network error loading case detail");
-    } finally {
-      setLoadingDetail(false);
-    }
-  };
-
-  const toggleInvestigation = (msgId: string) => {
-    setExpandedInvestigations((prev) => ({
-      ...prev,
-      [msgId]: !prev[msgId],
-    }));
-  };
 
   return (
     <div className="space-y-8">
@@ -213,13 +145,12 @@ export default function BuyerCasesPage() {
                       {new Date(c.created_at).toLocaleDateString()}
                     </td>
                     <td className="p-3.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openCaseDetail(c.id)}
+                      <Link
+                        href={`/buyer/cases/${c.id}`}
                         className="h-7 px-3 rounded-full border border-border text-muted-foreground text-[11px] font-mono hover:text-foreground hover:border-foreground/40 transition-colors"
                       >
                         Open Room
-                      </button>
+                      </Link>
                     </td>
                   </tr>
                 ))}
@@ -229,190 +160,6 @@ export default function BuyerCasesPage() {
         </div>
       )}
 
-      {/* Case Investigation & Chat Room Modal */}
-      {selectedCaseId && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl rounded-lg border border-border bg-card p-6 shadow-2xl space-y-6 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-border pb-4 shrink-0">
-              <div>
-                <span className="text-[10px] font-mono uppercase text-muted-foreground">
-                  Resolution Room &bull; {caseDetail?.case.case_number || "Loading"}
-                </span>
-                <h3 className="font-display text-2xl tracking-tight text-foreground">
-                  {caseDetail?.case.seller_name} Support Agent
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCaseId(null);
-                  setCaseDetail(null);
-                }}
-                className="text-muted-foreground hover:text-foreground text-sm font-mono"
-              >
-                Close
-              </button>
-            </div>
-
-            {loadingDetail || !caseDetail ? (
-              <div className="py-16 text-center text-xs font-mono text-muted-foreground">
-                Retrieving case investigation records...
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto space-y-6 pr-2">
-                {/* Order Summary Strip */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded border border-border bg-background text-xs font-mono">
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase">Order</span>
-                    <span className="text-foreground font-medium">{caseDetail.order.order_number}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase">Amount</span>
-                    <span className="text-foreground">
-                      {caseDetail.order.currency} {Number(caseDetail.order.total_amount ?? 0).toFixed(2)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase">Issue</span>
-                    <span className="text-foreground capitalize">
-                      {caseDetail.case.issue_category.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase">Case Status</span>
-                    <span className="text-foreground font-medium capitalize">
-                      {caseDetail.case.status.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Evidence Attachments */}
-                {caseDetail.evidence_urls.length > 0 && (
-                  <div className="p-3 rounded border border-border bg-background/50 text-xs font-mono">
-                    <span className="text-[10px] uppercase text-muted-foreground block mb-1">
-                      Submitted Photo Evidence
-                    </span>
-                    <div className="flex gap-2">
-                      {caseDetail.evidence_urls.map((id, idx) => (
-                        <span
-                          key={id}
-                          className="px-2.5 py-1 rounded border border-border bg-foreground/[0.02] text-[11px]"
-                        >
-                          Evidence File #{idx + 1}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Live Message & Investigation Stream */}
-                <div className="space-y-4 pt-2">
-                  <span className="text-[10px] font-mono uppercase text-muted-foreground block">
-                    Interaction History
-                  </span>
-
-                  {caseDetail.messages.map((msg) => {
-                    const isBuyer = msg.sender_role === "buyer";
-                    const isExpanded = expandedInvestigations[msg.id];
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex gap-3 text-xs font-mono ${
-                          isBuyer ? "justify-end" : "justify-start"
-                        }`}
-                      >
-                        {!isBuyer && (
-                          <div className="w-8 h-8 rounded-full border border-border bg-foreground/[0.04] flex items-center justify-center shrink-0">
-                            <Bot className="w-4 h-4 text-emerald-400" />
-                          </div>
-                        )}
-
-                        <div
-                          className={`max-w-lg rounded-lg p-4 space-y-3 ${
-                            isBuyer
-                              ? "bg-secondary text-secondary-foreground"
-                              : "bg-card border border-border text-foreground"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground border-b border-border/40 pb-2">
-                            <span className="font-bold uppercase">
-                              {isBuyer ? "You (Buyer)" : "SellerResolve Autonomous Agent"}
-                            </span>
-                            <span>{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-
-                          <p className="leading-relaxed whitespace-pre-wrap">{msg.message}</p>
-
-                          {/* Decision Badge */}
-                          {msg.decision_badge && (
-                            <div className="pt-1">
-                              <span
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[10px] border font-bold ${
-                                  msg.decision_badge === "executed"
-                                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                                    : msg.decision_badge === "needs_approval"
-                                    ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-                                    : "border-destructive/40 bg-destructive/10 text-destructive"
-                                }`}
-                              >
-                                <span>Decision: {msg.decision_badge.replace(/_/g, " ").toUpperCase()}</span>
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Investigation Drawer for Agent turns */}
-                          {msg.tool_calls && msg.tool_calls.length > 0 && (
-                            <div className="pt-2 border-t border-border/50">
-                              <button
-                                type="button"
-                                onClick={() => toggleInvestigation(msg.id)}
-                                className="w-full flex items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                <span>Investigation ({msg.tool_calls.length} tool call{msg.tool_calls.length > 1 ? "s" : ""})</span>
-                                {isExpanded ? (
-                                  <ChevronUp className="w-3.5 h-3.5" />
-                                ) : (
-                                  <ChevronDown className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-
-                              {isExpanded && (
-                                <div className="mt-2 space-y-2 pt-1">
-                                  {msg.tool_calls.map((tc, idx) => (
-                                    <div
-                                      key={idx}
-                                      className="p-2.5 rounded bg-background border border-border text-[10px] font-mono space-y-1"
-                                    >
-                                      <div className="flex items-center justify-between text-emerald-400">
-                                        <span className="font-bold">{tc.tool_name}</span>
-                                        <span className="text-muted-foreground">{tc.timestamp?.slice(11, 19)}</span>
-                                      </div>
-                                      <div className="text-muted-foreground">
-                                        Outcome: <span className="text-foreground">{tc.outcome}</span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {isBuyer && (
-                          <div className="w-8 h-8 rounded-full border border-border bg-foreground/[0.04] flex items-center justify-center shrink-0">
-                            <User className="w-4 h-4 text-foreground" />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

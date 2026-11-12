@@ -42,9 +42,10 @@ Authenticate existing user.
   ```json
   {
     "email": "seller@store.com",
-    "password": "SecurePassword123!"
+    "password": "Password123!"
   }
   ```
+- For the locally seeded demo seller, use `Password123!`; registered accounts use the password chosen at registration.
 - **Response (200 OK):** User payload + session cookie.
 
 ### `POST /auth/logout`
@@ -323,4 +324,3 @@ Upload photographic evidence for damage claims.
     "size_bytes": 1048576
   }
   ```
-

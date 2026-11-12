@@ -23,6 +23,8 @@ class _FakeResponse:
 
 
 class _FakeAsyncClient:
+    REQUESTS: list[tuple[str, dict[str, str]]] = []
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._responses = _FakeAsyncClient.RESPONSES
 
@@ -32,7 +34,13 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> bool:
         return False
 
-    async def post(self, url: str, json: dict[str, Any] | None = None) -> _FakeResponse:
+    async def post(
+        self,
+        url: str,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> _FakeResponse:
+        _FakeAsyncClient.REQUESTS.append((url, headers or {}))
         if not self._responses:
             raise RuntimeError("No mocked Gemini response remaining")
         item = self._responses.pop(0)
@@ -103,6 +111,7 @@ async def test_gemini_multi_step_function_calling_feeds_results_back(
         },
     ]
     _FakeAsyncClient.RESPONSES = responses
+    _FakeAsyncClient.REQUESTS = []
     monkeypatch.setattr("app.services.llm.client.httpx.AsyncClient", _FakeAsyncClient)
 
     client = GeminiLLMClient(api_key="test-key", model="gemini-test")
@@ -132,6 +141,9 @@ async def test_gemini_multi_step_function_calling_feeds_results_back(
     ]
     assert result == "Investigation complete: order, tracking, and buyer history reviewed."
     assert len(_FakeAsyncClient.RESPONSES) == 0
+    assert _FakeAsyncClient.REQUESTS
+    assert all("?key=" not in url for url, _ in _FakeAsyncClient.REQUESTS)
+    assert all(headers.get("x-goog-api-key") == "test-key" for _, headers in _FakeAsyncClient.REQUESTS)
 
 
 @pytest.mark.asyncio

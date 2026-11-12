@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   Bot,
@@ -16,8 +16,6 @@ import {
   Truck,
   Package,
   ShieldCheck,
-  RefreshCw,
-  FileImage,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -58,6 +56,7 @@ interface CaseDetail {
     }> | null;
     decision_badge?: string | null;
     created_at: string;
+    delivery_state?: "sending";
   }>;
 }
 
@@ -131,13 +130,14 @@ const DEMO_CASE_DETAIL: CaseDetail = {
 
 export default function CaseRoomPage() {
   const params = useParams();
-  const router = useRouter();
   const caseId = params?.id as string;
 
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [inputMsg, setInputMsg] = useState("");
   const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [retryRequest, setRetryRequest] = useState<{ text: string; id: string } | null>(null);
   const [expandedInvestigations, setExpandedInvestigations] = useState<Record<string, boolean>>({
     "msg-2": true,
   });
@@ -181,49 +181,68 @@ export default function CaseRoomPage() {
     }));
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = inputMsg.trim();
+  const sendMessage = async (text: string, requestId: string) => {
+    text = text.trim();
     if (!text || sending) return;
 
-    // Optimistic customer turn
-    const tempCustomerMsg = {
-      id: `temp-${Date.now()}`,
+    const optimisticId = `temp-${requestId}`;
+    const tempCustomerMsg: CaseDetail["messages"][number] = {
+      id: optimisticId,
       sender_role: "buyer",
       message: text,
       created_at: new Date().toISOString(),
+      delivery_state: "sending",
     };
-
-    if (detail) {
-      setDetail({
-        ...detail,
-        messages: [...detail.messages, tempCustomerMsg],
-      });
-    }
-
-    setInputMsg("");
+    setDetail((current) =>
+      current && !current.messages.some((item) => item.id === optimisticId)
+        ? { ...current, messages: [...current.messages, tempCustomerMsg] }
+        : current,
+    );
     setSending(true);
+    setChatError(null);
 
     try {
       const res = await fetch(`/api/v1/buyer/cases/${caseId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, client_message_id: requestId }),
       });
 
-      if (res.ok) {
-        const agentMsg = await res.json();
-        // Refresh full state to get updated case status/decision
-        fetchCaseDetail();
-      } else {
-        const err = await res.json();
-        toast.error(err.error?.message || "Failed to deliver message to agent");
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || "Failed to deliver message to agent.");
       }
-    } catch {
-      toast.error("Network error delivering message");
+
+      await res.json();
+      setInputMsg("");
+      setRetryRequest(null);
+      await fetchCaseDetail();
+    } catch (error) {
+      setDetail((current) =>
+        current
+          ? {
+              ...current,
+              messages: current.messages.filter((item) => item.id !== optimisticId),
+            }
+          : current,
+      );
+      setRetryRequest({ text, id: requestId });
+      setChatError(
+        error instanceof Error
+          ? `${error.message} Your message is saved here so you can retry safely.`
+          : "Network error delivering message. Your message is saved here so you can retry safely.",
+      );
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = inputMsg.trim();
+    if (!text || sending) return;
+    const requestId = retryRequest?.text === text ? retryRequest.id : crypto.randomUUID();
+    void sendMessage(text, requestId);
   };
 
   if (loading) {
@@ -332,7 +351,11 @@ export default function CaseRoomPage() {
       </div>
 
       {/* Message Timeline */}
-      <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-2"
+        aria-live="polite"
+        aria-busy={sending}
+      >
         {detail.messages.map((msg) => {
           const isBuyer = msg.sender_role === "buyer";
           const isExpanded = expandedInvestigations[msg.id];
@@ -370,6 +393,9 @@ export default function CaseRoomPage() {
                 </div>
 
                 <p className="leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                {msg.delivery_state === "sending" && (
+                  <p className="text-[10px] text-muted-foreground">Sending message...</p>
+                )}
 
                 {/* Decision Badge */}
                 {msg.decision_badge && (
@@ -443,24 +469,56 @@ export default function CaseRoomPage() {
       </div>
 
       {/* Customer Turn Input Bar */}
-      <form onSubmit={handleSendMessage} className="flex gap-2 shrink-0 pt-2 border-t border-border">
-        <input
-          type="text"
-          placeholder="Reply to agent or provide additional details..."
-          value={inputMsg}
-          onChange={(e) => setInputMsg(e.target.value)}
-          disabled={sending}
-          className="flex-1 h-11 px-4 bg-background border border-border rounded-full text-xs font-mono text-foreground focus:outline-none focus:border-foreground/50"
-        />
-        <button
-          type="submit"
-          disabled={sending || !inputMsg.trim()}
-          className="h-11 px-6 rounded-full bg-foreground text-background text-xs font-mono font-medium hover:opacity-90 transition-opacity flex items-center gap-2 disabled:opacity-50"
-        >
-          <span>{sending ? "Processing..." : "Send"}</span>
-          <Send className="w-3.5 h-3.5" />
-        </button>
-      </form>
+      <div className="shrink-0 pt-2 border-t border-border">
+        {sending && (
+          <p className="mb-2 text-[11px] font-mono text-muted-foreground" role="status">
+            Agent is reviewing your message...
+          </p>
+        )}
+        {chatError && (
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-destructive" role="alert">
+            <span>{chatError}</span>
+            {retryRequest && (
+              <button
+                type="button"
+                onClick={() => void sendMessage(retryRequest.text, retryRequest.id)}
+                disabled={sending}
+                className="underline underline-offset-2 disabled:opacity-50"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+        <form onSubmit={handleSendMessage} className="flex items-end gap-2">
+          <textarea
+            rows={2}
+            placeholder="Reply to agent or provide additional details..."
+            value={inputMsg}
+            onChange={(e) => setInputMsg(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            disabled={sending}
+            aria-label="Message the support agent"
+            className="min-h-11 flex-1 resize-none px-4 py-3 bg-background border border-border rounded-2xl text-xs font-mono text-foreground focus:outline-none focus:border-foreground/50 disabled:opacity-60"
+          />
+          <button
+            type="submit"
+            disabled={sending || !inputMsg.trim()}
+            className="h-11 px-5 rounded-full bg-foreground text-background text-xs font-mono font-medium hover:opacity-90 transition-opacity flex items-center gap-2 disabled:opacity-50"
+          >
+            <span>{sending ? "Processing..." : "Send"}</span>
+            <Send className="w-3.5 h-3.5" />
+          </button>
+        </form>
+        <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+          Press Enter to send, Shift+Enter for a new line.
+        </p>
+      </div>
     </div>
   );
 }
