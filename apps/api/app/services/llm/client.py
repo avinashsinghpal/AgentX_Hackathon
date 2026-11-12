@@ -332,7 +332,9 @@ class GeminiLLMClient(LLMClient):
                 {
                     "name": name,
                     "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                    "parameters": _to_gemini_schema(
+                        tool.get("parameters", {"type": "object", "properties": {}})
+                    ),
                 }
             )
 
@@ -475,6 +477,76 @@ class LLMProviderError(RuntimeError):
 
 class LLMConfigurationError(RuntimeError):
     """Raised when a requested LLM provider is missing required configuration."""
+
+
+def _to_gemini_schema(schema: Any) -> dict[str, Any]:
+    """Convert Pydantic JSON Schema to the smaller Gemini function schema."""
+    if not isinstance(schema, dict):
+        raise LLMConfigurationError("Gemini tool parameters must be a JSON Schema object.")
+
+    if "anyOf" in schema:
+        variants = schema["anyOf"]
+        non_null_variants = [
+            variant
+            for variant in variants
+            if isinstance(variant, dict) and variant.get("type") != "null"
+        ]
+        if len(non_null_variants) != 1:
+            raise LLMConfigurationError(
+                "Gemini tool parameters only support nullable single-type unions."
+            )
+        schema = {
+            **{key: value for key, value in schema.items() if key != "anyOf"},
+            **non_null_variants[0],
+        }
+
+    type_names = {
+        "array": "ARRAY",
+        "boolean": "BOOLEAN",
+        "integer": "INTEGER",
+        "number": "NUMBER",
+        "object": "OBJECT",
+        "string": "STRING",
+    }
+    supported_fields = {
+        "description",
+        "enum",
+        "format",
+        "items",
+        "maximum",
+        "maxItems",
+        "maxLength",
+        "minimum",
+        "minItems",
+        "minLength",
+        "pattern",
+        "properties",
+        "required",
+        "type",
+    }
+    converted: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key not in supported_fields:
+            continue
+        if key == "type":
+            if value not in type_names:
+                raise LLMConfigurationError(f"Unsupported Gemini tool parameter type: {value!r}.")
+            converted[key] = type_names[value]
+        elif key == "properties":
+            if not isinstance(value, dict):
+                raise LLMConfigurationError("Gemini object properties must be a JSON Schema object.")
+            converted[key] = {
+                name: _to_gemini_schema(property_schema)
+                for name, property_schema in value.items()
+            }
+        elif key == "items":
+            converted[key] = _to_gemini_schema(value)
+        else:
+            converted[key] = value
+
+    if "type" not in converted:
+        raise LLMConfigurationError("Gemini tool parameter schema must declare a type.")
+    return converted
 
 
 class AnthropicLLMClient(LLMClient):

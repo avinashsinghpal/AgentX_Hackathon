@@ -4,7 +4,13 @@ from typing import Any
 
 import pytest
 
-from app.services.llm.client import GeminiLLMClient, LLMMessage
+from app.services.agent.orchestrator import ResolutionOrchestrator
+from app.services.llm.client import (
+    GeminiLLMClient,
+    LLMConfigurationError,
+    LLMMessage,
+    _to_gemini_schema,
+)
 
 
 class _FakeResponse:
@@ -214,3 +220,35 @@ async def test_gemini_unknown_tool_is_handled_coherently(monkeypatch: pytest.Mon
 
     assert calls == []
     assert result == "I cannot perform that action."
+
+
+def test_gemini_tool_schemas_use_provider_supported_fields() -> None:
+    declarations = ResolutionOrchestrator().tool_declarations
+
+    lookup_order = next(tool for tool in declarations if tool["name"] == "lookup_order")
+    assert _to_gemini_schema(lookup_order["parameters"]) == {
+        "type": "OBJECT",
+        "properties": {"order_id": {"type": "STRING", "maxLength": 128}},
+    }
+
+    for tool in declarations:
+        converted = _to_gemini_schema(tool["parameters"])
+        assert "additionalProperties" not in converted
+        assert converted["type"] == "OBJECT"
+
+
+def test_gemini_tool_schema_rejects_unsupported_union_types() -> None:
+    with pytest.raises(LLMConfigurationError, match="nullable single-type unions"):
+        _to_gemini_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "integer"},
+                        ]
+                    }
+                },
+            }
+        )
